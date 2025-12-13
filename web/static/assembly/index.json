@@ -1,0 +1,70 @@
+{
+  "examples": [
+    {
+      "id": "hello",
+      "title": "Hello Registers",
+      "category": "Basics",
+      "file": "hello-registers.asm"
+    },
+    {
+      "id": "loop",
+      "title": "Counting Loop",
+      "category": "Basics",
+      "file": "counting-loop.asm"
+    },
+    {
+      "id": "compare",
+      "title": "Compare & Branch",
+      "category": "Basics",
+      "file": "compare-branch.asm"
+    },
+    {
+      "id": "poke",
+      "title": "Change Border Color",
+      "category": "Memory",
+      "file": "border-color.asm"
+    },
+    {
+      "id": "stack",
+      "title": "Stack Push/Pop",
+      "category": "Memory",
+      "file": "stack-pushpop.asm"
+    },
+    {
+      "id": "subroutine",
+      "title": "Subroutine Call",
+      "category": "Subroutines",
+      "file": "subroutine-call.asm"
+    },
+    {
+      "id": "chrout",
+      "title": "Print Character",
+      "category": "Subroutines",
+      "file": "print-character.asm"
+    },
+    {
+      "id": "print",
+      "title": "Print String",
+      "category": "Subroutines",
+      "file": "print-string.asm"
+    },
+    {
+      "id": "raster",
+      "title": "Raster Interrupt",
+      "category": "VIC-II Graphics",
+      "file": "raster-interrupt.asm"
+    },
+    {
+      "id": "scroll",
+      "title": "Smooth Scrolling",
+      "category": "VIC-II Graphics",
+      "file": "smooth-scrolling.asm"
+    },
+    {
+      "id": "vscroll",
+      "title": "Vertical Scrolling",
+      "category": "VIC-II Graphics",
+      "file": "vertical-scrolling.asm"
+    }
+  ]
+}

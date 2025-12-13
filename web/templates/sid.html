@@ -1,0 +1,654 @@
+{% extends "base.html" %}
+
+{% block title %}Sound Chip - Turbo8bit{% endblock %}
+
+{% block extra_head %}
+<script type="module" src="/static/js/emulator/sid-player.js"></script>
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+{% endblock %}
+
+{% block content %}
+<!-- Workspace: Two-panel layout -->
+<div class="workspace sid-workspace">
+    <!-- Left Panel: Voice Visualizer & Register Monitor -->
+    <div class="workspace-primary">
+        <div class="panel-content">
+            <div class="panel-header">
+                <h2>SID MONITOR</h2>                
+            </div>
+            <div class="panel-body sid-monitor-body">
+                <!-- Voice Visualization -->
+                <div class="voice-visualizer">
+                    <div class="voice-panel" id="voice-0">
+                        <div class="voice-header">
+                            <span class="voice-label">VOICE 1</span>
+                            <span class="voice-waveform" id="wave-0">OFF</span>
+                        </div>
+                        <div class="voice-meters">
+                            <div class="meter-row">
+                                <span class="meter-label">FREQ</span>
+                                <div class="meter-bar"><div class="meter-fill freq-fill" id="freq-0"></div></div>
+                                <span class="meter-value" id="freq-val-0">0</span>
+                            </div>
+                            <div class="meter-row">
+                                <span class="meter-label">ENV</span>
+                                <div class="meter-bar"><div class="meter-fill env-fill" id="env-0"></div></div>
+                                <span class="meter-value" id="env-val-0">0</span>
+                            </div>
+                            <div class="adsr-display">
+                                <span class="adsr-label">A:<span id="attack-0">0</span></span>
+                                <span class="adsr-label">D:<span id="decay-0">0</span></span>
+                                <span class="adsr-label">S:<span id="sustain-0">0</span></span>
+                                <span class="adsr-label">R:<span id="release-0">0</span></span>
+                            </div>
+                        </div>
+                        <div class="gate-indicator" id="gate-0">GATE</div>
+                    </div>
+                    
+                    <div class="voice-panel" id="voice-1">
+                        <div class="voice-header">
+                            <span class="voice-label">VOICE 2</span>
+                            <span class="voice-waveform" id="wave-1">OFF</span>
+                        </div>
+                        <div class="voice-meters">
+                            <div class="meter-row">
+                                <span class="meter-label">FREQ</span>
+                                <div class="meter-bar"><div class="meter-fill freq-fill" id="freq-1"></div></div>
+                                <span class="meter-value" id="freq-val-1">0</span>
+                            </div>
+                            <div class="meter-row">
+                                <span class="meter-label">ENV</span>
+                                <div class="meter-bar"><div class="meter-fill env-fill" id="env-1"></div></div>
+                                <span class="meter-value" id="env-val-1">0</span>
+                            </div>
+                            <div class="adsr-display">
+                                <span class="adsr-label">A:<span id="attack-1">0</span></span>
+                                <span class="adsr-label">D:<span id="decay-1">0</span></span>
+                                <span class="adsr-label">S:<span id="sustain-1">0</span></span>
+                                <span class="adsr-label">R:<span id="release-1">0</span></span>
+                            </div>
+                        </div>
+                        <div class="gate-indicator" id="gate-1">GATE</div>
+                    </div>
+                    
+                    <div class="voice-panel" id="voice-2">
+                        <div class="voice-header">
+                            <span class="voice-label">VOICE 3</span>
+                            <span class="voice-waveform" id="wave-2">OFF</span>
+                        </div>
+                        <div class="voice-meters">
+                            <div class="meter-row">
+                                <span class="meter-label">FREQ</span>
+                                <div class="meter-bar"><div class="meter-fill freq-fill" id="freq-2"></div></div>
+                                <span class="meter-value" id="freq-val-2">0</span>
+                            </div>
+                            <div class="meter-row">
+                                <span class="meter-label">ENV</span>
+                                <div class="meter-bar"><div class="meter-fill env-fill" id="env-2"></div></div>
+                                <span class="meter-value" id="env-val-2">0</span>
+                            </div>
+                            <div class="adsr-display">
+                                <span class="adsr-label">A:<span id="attack-2">0</span></span>
+                                <span class="adsr-label">D:<span id="decay-2">0</span></span>
+                                <span class="adsr-label">S:<span id="sustain-2">0</span></span>
+                                <span class="adsr-label">R:<span id="release-2">0</span></span>
+                            </div>
+                        </div>
+                        <div class="gate-indicator" id="gate-2">GATE</div>
+                    </div>
+                </div>
+                
+                <!-- Filter Display -->
+                <div class="filter-display">
+                    <div class="filter-header">FILTER</div>
+                    <div class="filter-info">
+                        <div class="filter-param">
+                            <span class="param-label">CUTOFF</span>
+                            <div class="meter-bar filter-bar"><div class="meter-fill cutoff-fill" id="cutoff-meter"></div></div>
+                            <span class="param-value" id="cutoff-val">0</span>
+                        </div>
+                        <div class="filter-param">
+                            <span class="param-label">RES</span>
+                            <div class="meter-bar filter-bar"><div class="meter-fill res-fill" id="res-meter"></div></div>
+                            <span class="param-value" id="res-val">0</span>
+                        </div>
+                        <div class="filter-modes">
+                            <span class="filter-mode" id="filter-lp">LP</span>
+                            <span class="filter-mode" id="filter-bp">BP</span>
+                            <span class="filter-mode" id="filter-hp">HP</span>
+                        </div>
+                        <div class="filter-voices">
+                            <span class="filter-voice" id="flt-v1">V1</span>
+                            <span class="filter-voice" id="flt-v2">V2</span>
+                            <span class="filter-voice" id="flt-v3">V3</span>
+                        </div>
+                    </div>
+                    <div class="volume-display">
+                        <span class="param-label">VOLUME</span>
+                        <div class="volume-meter" id="volume-meter">
+                            <div class="volume-bar" id="vol-0"></div>
+                            <div class="volume-bar" id="vol-1"></div>
+                            <div class="volume-bar" id="vol-2"></div>
+                            <div class="volume-bar" id="vol-3"></div>
+                            <div class="volume-bar" id="vol-4"></div>
+                            <div class="volume-bar" id="vol-5"></div>
+                            <div class="volume-bar" id="vol-6"></div>
+                            <div class="volume-bar" id="vol-7"></div>
+                            <div class="volume-bar" id="vol-8"></div>
+                            <div class="volume-bar" id="vol-9"></div>
+                            <div class="volume-bar" id="vol-10"></div>
+                            <div class="volume-bar" id="vol-11"></div>
+                            <div class="volume-bar" id="vol-12"></div>
+                            <div class="volume-bar" id="vol-13"></div>
+                            <div class="volume-bar" id="vol-14"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Register Activity Display -->
+                <div class="register-activity">
+                    <div class="register-header">REGISTER WRITES</div>
+                    <div class="register-grid" id="register-grid">
+                        <!-- Registers will be populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Right Panel: Song Selection & Controls -->
+    <div class="workspace-secondary">
+        <div class="panel-content">
+            <div class="panel-header">
+                <h2>SID PLAYER</h2>
+            </div>
+            <div class="panel-body sid-player-body">
+                <!-- Song Selector -->
+                <div class="sid-selector-horizontal">
+                    <div class="selector-label">select a sid file</div>
+                    <div class="sid-btn-grid">
+                        <button class="sid-btn active" data-url="/static/sid/Last_Ninja.sid">Last Ninja</button>
+                        <button class="sid-btn" data-url="/static/sid/Great_Giana_Sisters.sid">Giana Sisters</button>
+                        <button class="sid-btn" data-url="/static/sid/Cybernoid.sid">Cybernoid</button>
+                    </div>
+                </div>
+                
+                <!-- Song Info -->
+                <div class="song-info-vertical">
+                    <div class="song-title" id="song-title">Last Ninja</div>
+                    <div class="song-author" id="song-author">Ben Daglish & Anthony Lees</div>
+                    <div class="song-released" id="song-released">1987 System 3</div>
+                </div>
+                
+                <!-- Track Selector -->
+                <div class="track-section">
+                    <div class="selector-label">SELECT TRACK</div>
+                    <div class="track-selector" id="track-selector">
+                        <!-- Track buttons will be populated by JavaScript -->
+                    </div>
+                </div>
+                
+                <!-- Player Controls -->
+                <div class="player-controls-horizontal">
+                    <button class="player-btn play-btn" id="btn-play" title="Play">▶ PLAY</button>
+                    <button class="player-btn" id="btn-restart" title="Restart Track">↺ RESTART</button>
+                </div>
+                <div class="frame-counter" id="frame-counter">Frame: 0 | 0:00</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Information Section Below -->
+<div class="info-section-below sid-info">
+    <div class="sid-intro-row">
+        <div class="sid-intro-text">
+            <h2>THE SID CHIP</h2>
+            <p>The legendary MOS 6581/8580 Sound Interface Device - essentially a professional synthesizer on a single chip. Designed by Bob Yannes, who later founded Ensoniq.</p>
+        </div>
+        <div id="sid-3d-container-mini"></div>
+    </div>
+    <div class="info-columns">
+        <div class="info-column">
+            <h3>Three-Voice Architecture</h3>
+            <p>Each voice has its own oscillator, waveform selector, ADSR envelope, and can produce:</p>
+            <ul>
+                <li><strong>Triangle:</strong> Soft, mellow tone for flutes and bass</li>
+                <li><strong>Sawtooth:</strong> Bright, buzzy harmonics for strings</li>
+                <li><strong>Pulse:</strong> Variable duty cycle, most versatile</li>
+                <li><strong>Noise:</strong> Pseudo-random for percussion/effects</li>
+            </ul>
+        </div>
+        
+        <div class="info-column">
+            <h3>ADSR Envelope</h3>
+            <p>Each voice has a dedicated envelope generator:</p>
+            <ul>
+                <li><strong>Attack:</strong> Rise time (2ms - 8 seconds)</li>
+                <li><strong>Decay:</strong> Fall to sustain (6ms - 24 seconds)</li>
+                <li><strong>Sustain:</strong> Held level (16 levels)</li>
+                <li><strong>Release:</strong> Fade out (6ms - 24 seconds)</li>
+            </ul>
+        </div>
+        
+        <div class="info-column">
+            <h3>Programmable Filter</h3>
+            <p>Multi-mode resonant filter applicable to any voice combination:</p>
+            <ul>
+                <li><strong>Low-Pass:</strong> Warm, muffled tones</li>
+                <li><strong>High-Pass:</strong> Thin, bright tones</li>
+                <li><strong>Band-Pass:</strong> Vocal, nasal tones</li>
+                <li><strong>Notch:</strong> HP+LP combined</li>
+            </ul>
+        </div>
+        
+        <div class="info-column">
+            <h3>Chip Versions</h3>
+            <p><strong>MOS 6581</strong> (1982-1986): Original chip, 12V, darker filter sound. Used in "breadbin" C64s.</p>
+            <p><strong>MOS 8580</strong> (1986-1994): Revised design, 9V, cleaner filter. Used in C64C and C128.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+    
+    let player = null;
+    let animationId = null;
+    let isPlaying = false;
+    
+    // Register names for display (all 29 SID registers: $D400-$D41C)
+    const registerNames = [
+        'FQ1L', 'FQ1H', 'PW1L', 'PW1H', 'CTL1', 'AD1', 'SR1',  // Voice 1: $D400-$D406
+        'FQ2L', 'FQ2H', 'PW2L', 'PW2H', 'CTL2', 'AD2', 'SR2',  // Voice 2: $D407-$D40D
+        'FQ3L', 'FQ3H', 'PW3L', 'PW3H', 'CTL3', 'AD3', 'SR3',  // Voice 3: $D40E-$D414
+        'FCLO', 'FCHI', 'RESF', 'MVOL',                        // Filter: $D415-$D418
+        'POTX', 'POTY', 'OSC3', 'ENV3'                         // Read-only: $D419-$D41C
+    ];
+    
+    // Create register grid
+    function initRegisterGrid() {
+        const grid = document.getElementById('register-grid');
+        if (!grid) return;
+        
+        grid.innerHTML = '';
+        for (let i = 0; i < registerNames.length; i++) {
+            const cell = document.createElement('div');
+            cell.className = 'register-cell';
+            // Mark read-only registers (last 4)
+            if (i >= 25) cell.classList.add('read-only');
+            cell.id = `reg-${i}`;
+            cell.innerHTML = `
+                <span class="reg-name">${registerNames[i]}</span>
+                <span class="reg-value">00</span>
+            `;
+            grid.appendChild(cell);
+        }
+    }
+    
+    // Update visualization
+    function updateVisualization() {
+        if (!player) return;
+        
+        const state = player.getState();
+        if (!state) return;
+        
+        // Update song info
+        if (state.name) {
+            const titleEl = document.getElementById('song-title');
+            const authorEl = document.getElementById('song-author');
+            const releasedEl = document.getElementById('song-released');
+            const trackInfoEl = document.getElementById('track-info');
+            if (titleEl) titleEl.textContent = state.name;
+            if (authorEl) authorEl.textContent = state.author;
+            if (releasedEl) releasedEl.textContent = state.released;
+            if (trackInfoEl) trackInfoEl.textContent = `Track ${state.currentSong}/${state.totalSongs}`;
+        }
+        
+        // Update frame counter
+        const minutes = Math.floor(state.elapsedTime / 60);
+        const seconds = Math.floor(state.elapsedTime % 60);
+        const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        const frameCounterEl = document.getElementById('frame-counter');
+        if (frameCounterEl) {
+            let status = '';
+            if (player.audioContext) {
+                status = player.audioContext.state === 'running' ? ' [Audio]' : ' [Visual Only]';
+            }
+            frameCounterEl.textContent = `Frame: ${state.frameCount} | ${timeStr}${status}`;
+        }
+        
+        // Update voices
+        if (state.voices) {
+            for (let v = 0; v < 3; v++) {
+                const voice = state.voices[v];
+                if (!voice) continue;
+            
+            // Waveform
+            const waveEl = document.getElementById(`wave-${v}`);
+            if (waveEl) waveEl.textContent = voice.waveform;
+            
+            // Frequency (16-bit, show as percentage)
+            const freqPct = (voice.freq / 65535) * 100;
+            const freqEl = document.getElementById(`freq-${v}`);
+            const freqValEl = document.getElementById(`freq-val-${v}`);
+            if (freqEl) freqEl.style.width = `${freqPct}%`;
+            if (freqValEl) freqValEl.textContent = voice.freq;
+            
+            // Envelope (0-255)
+            const envPct = (voice.envelope / 255) * 100;
+            const envEl = document.getElementById(`env-${v}`);
+            const envValEl = document.getElementById(`env-val-${v}`);
+            if (envEl) envEl.style.width = `${envPct}%`;
+            if (envValEl) envValEl.textContent = voice.envelope;
+            
+            // ADSR values
+            const attackEl = document.getElementById(`attack-${v}`);
+            const decayEl = document.getElementById(`decay-${v}`);
+            const sustainEl = document.getElementById(`sustain-${v}`);
+            const releaseEl = document.getElementById(`release-${v}`);
+            if (attackEl) attackEl.textContent = voice.attack;
+            if (decayEl) decayEl.textContent = voice.decay;
+            if (sustainEl) sustainEl.textContent = voice.sustain;
+            if (releaseEl) releaseEl.textContent = voice.release;
+            
+            // Gate indicator
+            const gateEl = document.getElementById(`gate-${v}`);
+            if (gateEl) {
+                if (voice.gate) {
+                    gateEl.classList.add('active');
+                } else {
+                    gateEl.classList.remove('active');
+                }
+            }
+        }
+        }
+        
+        // Update filter
+        const filter = state.filter;
+        if (filter) {
+            // Cutoff (11-bit, 0-2047)
+            const cutoffPct = (filter.cutoff / 2047) * 100;
+            const cutoffMeter = document.getElementById('cutoff-meter');
+            const cutoffVal = document.getElementById('cutoff-val');
+            if (cutoffMeter) cutoffMeter.style.width = `${cutoffPct}%`;
+            if (cutoffVal) cutoffVal.textContent = filter.cutoff;
+            
+            // Resonance (4-bit, 0-15)
+            const resPct = (filter.resonance / 15) * 100;
+            const resMeter = document.getElementById('res-meter');
+            const resVal = document.getElementById('res-val');
+            if (resMeter) resMeter.style.width = `${resPct}%`;
+            if (resVal) resVal.textContent = filter.resonance;
+            
+            // Filter modes
+            const filterLp = document.getElementById('filter-lp');
+            const filterBp = document.getElementById('filter-bp');
+            const filterHp = document.getElementById('filter-hp');
+            if (filterLp) filterLp.classList.toggle('active', filter.lowPass);
+            if (filterBp) filterBp.classList.toggle('active', filter.bandPass);
+            if (filterHp) filterHp.classList.toggle('active', filter.highPass);
+            
+            // Filter voice routing
+            const fltV1 = document.getElementById('flt-v1');
+            const fltV2 = document.getElementById('flt-v2');
+            const fltV3 = document.getElementById('flt-v3');
+            if (fltV1 && filter.voices) fltV1.classList.toggle('active', filter.voices[0]);
+            if (fltV2 && filter.voices) fltV2.classList.toggle('active', filter.voices[1]);
+            if (fltV3 && filter.voices) fltV3.classList.toggle('active', filter.voices[2]);
+            
+            // Volume
+            for (let i = 0; i < 15; i++) {
+                const bar = document.getElementById(`vol-${i}`);
+                if (bar) {
+                    bar.classList.toggle('active', i < filter.volume);
+                }
+            }
+        }
+        
+        // Update registers (show all 29 SID registers)
+        const regs = state.registers;
+        if (regs) {
+            const numRegs = Math.min(regs.length, registerNames.length);
+            for (let i = 0; i < numRegs; i++) {
+                const cell = document.getElementById(`reg-${i}`);
+                if (cell) {
+                    const valEl = cell.querySelector('.reg-value');
+                    if (valEl && regs[i] !== undefined) {
+                        const newVal = regs[i].toString(16).padStart(2, '0').toUpperCase();
+                        if (valEl.textContent !== newVal) {
+                            valEl.textContent = newVal;
+                            cell.classList.add('updated');
+                            setTimeout(() => cell.classList.remove('updated'), 100);
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (isPlaying) {
+            // If audio is not generating frames (suspended AudioContext), run visualization frames
+            // This ensures registers update even when browser blocks audio autoplay
+            if (player.audioContext && player.audioContext.state === 'suspended' && player.runVisualizationFrame) {
+                // console.log('Running visualization fallback (audio suspended)');
+                player.runVisualizationFrame();
+            }
+            animationId = requestAnimationFrame(updateVisualization);
+        }
+    }
+    
+    // Update track selector buttons
+    function updateTrackSelector() {
+        const container = document.getElementById('track-selector');
+        if (!container || !player) return;
+        
+        const state = player.getState();
+        container.innerHTML = '';
+        
+        for (let i = 1; i <= state.totalSongs; i++) {
+            const btn = document.createElement('button');
+            btn.className = 'track-btn' + (i === state.currentSong ? ' active' : '');
+            btn.textContent = i;
+            btn.title = `Track ${i}`;
+            btn.addEventListener('click', () => selectTrack(i));
+            container.appendChild(btn);
+        }
+    }
+    
+    // Select a specific track
+    function selectTrack(trackNum) {
+        if (!player) return;
+        player.changeTrack(trackNum - 1);  // 0-based
+        updateTrackSelector();
+        
+        // If playing, restart with new track
+        if (isPlaying) {
+            player.play();
+        }
+    }
+    
+    // Load a SID file by URL
+    async function loadSong(url) {
+        // Stop current playback and clean up audio state
+        if (isPlaying) {
+            player.stop();
+            isPlaying = false;
+            const btn = document.getElementById('btn-play');
+            btn.textContent = '\u25b6';
+            btn.classList.remove('playing');
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+        }
+        
+        try {
+            await player.load(url);
+            console.log('SID file loaded:', url);
+            
+            // Reset frame counter display
+            const frameCounterEl = document.getElementById('frame-counter');
+            if (frameCounterEl) frameCounterEl.textContent = 'Frame: 0 | 0:00';
+            
+            // Update display
+            const state = player.getState();
+            document.getElementById('song-title').textContent = state.name || 'Unknown';
+            document.getElementById('song-author').textContent = state.author || 'Unknown';
+            document.getElementById('song-released').textContent = state.released || '';
+            
+            // Update track selector
+            updateTrackSelector();
+        } catch (e) {
+            console.error('Failed to load SID file:', e);
+            document.getElementById('song-title').textContent = 'Load Error';
+        }
+    }
+    
+    // Handle SID button click
+    async function onSidButtonClick(event) {
+        const btn = event.target;
+        if (!btn.classList.contains('sid-btn')) return;
+        
+        // Update active state
+        document.querySelectorAll('.sid-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        // Load the SID and auto-play
+        await loadSong(btn.dataset.url);
+        
+        // Auto-play after loading
+        if (!isPlaying) {
+            togglePlay();
+        }
+    }
+    
+    // Initialize player
+    async function initPlayer() {
+        console.log('Initializing SIDPlayer...');
+        
+        // Ensure SIDPlayer is available (should be set by index.js)
+        if (typeof SIDPlayer === 'undefined') {
+            console.error('SIDPlayer not available! Check that index.js loaded correctly.');
+            return;
+        }
+        
+        try {
+            player = new SIDPlayer();
+            console.log('SIDPlayer created:', player);
+            
+            // Load the first (active) SID button
+            const activeBtn = document.querySelector('.sid-btn.active');
+            if (activeBtn) {
+                console.log('Loading SID:', activeBtn.dataset.url);
+                await loadSong(activeBtn.dataset.url);
+                console.log('SID loaded');
+            }
+        } catch (e) {
+            console.error('Failed to initialize SIDPlayer:', e);
+        }
+    }
+    
+    // Play button handler
+    async function togglePlay() {
+        if (!player) {
+            console.error('No player!');
+            return;
+        }
+        
+        const btn = document.getElementById('btn-play');
+        
+        // Prevent double-clicks while loading
+        if (btn.disabled) return;
+        
+        if (isPlaying) {
+            console.log('Stopping playback');
+            player.stop();
+            isPlaying = false;
+            btn.textContent = '▶';
+            btn.classList.remove('playing');
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+        } else {
+            console.log('Starting playback');
+            
+            // Disable button while loading
+            btn.disabled = true;
+            btn.style.opacity = '0.5';
+            btn.style.cursor = 'wait';
+            
+            try {
+                await player.play();
+                console.log('Playback started, isPlaying:', player.isPlaying);
+                isPlaying = true;
+                btn.textContent = '❚❚';
+                btn.classList.add('playing');
+                updateVisualization();
+            } catch (e) {
+                console.error('Playback failed:', e);
+            } finally {
+                // Re-enable button
+                btn.disabled = false;
+                btn.style.opacity = '';
+                btn.style.cursor = '';
+            }
+        }
+    }
+    
+    // Restart current track from beginning
+    function restartTrack() {
+        if (!player) return;
+        const state = player.getState();
+        player.changeTrack(state.currentSong - 1);
+        updateTrackSelector();
+    }
+    
+    // Initialize when player module is ready
+    function onPlayerReady() {
+        initRegisterGrid();
+        initPlayer();
+        
+        document.getElementById('btn-play').addEventListener('click', togglePlay);
+        document.getElementById('btn-restart').addEventListener('click', restartTrack);
+        
+        // Set up SID button clicks
+        document.querySelector('.sid-selector-horizontal').addEventListener('click', onSidButtonClick);
+    }
+    
+    // Wait for both DOM and module to be ready
+    document.addEventListener('DOMContentLoaded', function() {
+        if (window.SIDPlayer) {
+            // Module already loaded
+            onPlayerReady();
+        } else {
+            // Wait for module to load
+            window.addEventListener('sidplayer-ready', onPlayerReady);
+        }
+    });
+})();
+</script>
+
+<!-- 3D SID Chip Script -->
+<script type="module">
+    import { initChip3DScene, C64_CHIPS } from '/static/js/chip3d.js';
+    
+    const container = document.getElementById('sid-3d-container-mini');
+    if (container) {
+        // Initialize 3D SID chip using the shared module
+        initChip3DScene(container, {
+            textureOptions: C64_CHIPS.SID_6581.textureOptions,
+            chipOptions: C64_CHIPS.SID_6581.chipOptions,
+            autoRotate: true,
+            autoRotateSpeed: 1.0
+        });
+    }
+</script>
+{% endblock %}

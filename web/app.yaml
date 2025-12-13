@@ -1,0 +1,16 @@
+runtime: python310
+entrypoint: gunicorn -b :$PORT main:app
+
+env_variables:
+  # Set your Google OAuth2 Client ID from Google Cloud Console
+  # GOOGLE_CLIENT_ID: "your-client-id.apps.googleusercontent.com"
+  # Comma-separated list of admin email addresses
+  # ADMIN_EMAILS: "admin@example.com"
+  # Secret key for Flask sessions (generate a secure random string)
+  # SECRET_KEY: "your-secret-key-here"
+
+handlers:
+- url: /static
+  static_dir: static
+- url: /.*
+  script: auto

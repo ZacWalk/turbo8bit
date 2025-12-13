@@ -1,0 +1,4 @@
+10 INPUT "WHICH TABLE"; N
+20 FOR I = 1 TO 12
+30 PRINT N; " X "; I; " = "; N*I
+40 NEXT I

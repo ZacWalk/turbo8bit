@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+
+{% block title %}Hardware Simulator - Turbo8bit{% endblock %}
+
+{% block extra_head %}
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+{% endblock %}
+
+{% block content %}
+<!-- Workspace: Two-panel layout -->
+<div class="workspace">
+    <!-- Left Panel: Bus Simulation Canvas -->
+    <div class="workspace-primary">
+        <div class="panel-content">
+            <div class="panel-header">
+                <h2>BUS SIMULATION</h2>
+            </div>
+            <div class="panel-body">
+                <canvas id="simCanvas" width="800" height="600"></canvas>
+                <div class="bus-legend">
+                    <span><span class="dot address-dot"></span> Address Bus (Request)</span>
+                    <span><span class="dot data-dot"></span> Data Bus (Payload)</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Right Panel: Scenario Controls -->
+    <div class="workspace-secondary">
+        <div class="panel-content">
+            <div class="panel-header">
+                <h2>SCENARIOS</h2>
+            </div>
+            <div class="panel-body">
+                <div class="log-panel" id="logPanel">
+                    <div class="log-entry">System Ready. Select a scenario below.</div>
+                </div>
+                
+                <div class="scenario-buttons">
+                    <button class="scenario-btn" onclick="runScenario('boot')">⚡ Power On / Boot (Kernal)</button>
+                    <button class="scenario-btn" onclick="runScenario('typing')">⌨️ Typing Character</button>
+                    <button class="scenario-btn" onclick="runScenario('vic')">📺 VIC-II Screen Refresh</button>
+                    <button class="scenario-btn" onclick="runScenario('sound')">🎵 SID Sound Event</button>
+                </div>
+                
+                <div class="info-section">
+                    <h2>HOW IT WORKS</h2>
+                    <div class="default-info">
+                        <p><strong>The Spine Metaphor:</strong> The central bus acts as the backbone, connecting all components.</p>
+                        <p><strong>Red Dots (Address Bus):</strong> Components asking "Where is the data?" or "Where should I put this?"</p>
+                        <p><strong>Yellow Dots (Data Bus):</strong> The actual information (numbers, letters, graphics) moving between components.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Information Section Below -->
+<div class="info-section-below hardware-info">
+    <h2>COMMODORE 64 HARDWARE</h2>
+    
+    <!-- Motherboard Reference Image -->
+    <div class="motherboard-section">
+        <p class="section-intro">The C64C motherboard with key chips labeled. The C64's architecture is elegantly simple yet powerful.</p>
+        <div class="motherboard-image-container">
+            <img src="/static/C64Cmotherboard.annotated.png" alt="Annotated C64C Motherboard showing chip locations" class="motherboard-image">
+        </div>
+    </div>
+    
+    <h3 class="chip-section-title">CHIP REFERENCE</h3>
+    <div class="chip-grid">
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-cpu"></div>
+                <h3>CPU</h3>
+                <p>The brain of the C64. An enhanced 6502 with built-in I/O port for bank switching.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 6510 / 8500</li>
+                    <li><span class="label">Clock:</span> ~1 MHz</li>
+                    <li><span class="label">Address Bus:</span> 16-bit (64KB)</li>
+                    <li><span class="label">Data Bus:</span> 8-bit</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-vic"></div>
+                <h3>VIC-II</h3>
+                <p>Handles all graphics: sprites, characters, bitmaps. Can steal bus cycles from CPU.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 6569 (PAL) / 6567 (NTSC)</li>
+                    <li><span class="label">Resolution:</span> 320×200 / 160×200</li>
+                    <li><span class="label">Colors:</span> 16</li>
+                    <li><span class="label">Sprites:</span> 8 hardware</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-sid"></div>
+                <h3>SID</h3>
+                <p>The legendary sound chip that made C64 music famous worldwide.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 6581 (12V) / 8580 (9V)</li>
+                    <li><span class="label">Voices:</span> 3 independent</li>
+                    <li><span class="label">Waveforms:</span> 4 types</li>
+                    <li><span class="label">Filters:</span> Programmable</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-cia1"></div>
+                <h3>CIA 1</h3>
+                <p>Complex Interface Adapter handling keyboard scanning and joystick ports.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 6526 / 8521</li>
+                    <li><span class="label">Function:</span> Keyboard/Joystick</li>
+                    <li><span class="label">Timers:</span> 2 × 16-bit</li>
+                    <li><span class="label">I/O Ports:</span> 2 × 8-bit</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-cia2"></div>
+                <h3>CIA 2</h3>
+                <p>Second CIA chip controlling serial bus, user port, and VIC bank selection.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 6526 / 8521</li>
+                    <li><span class="label">Function:</span> Serial/User port</li>
+                    <li><span class="label">VIC Bank:</span> Selects 16KB bank</li>
+                    <li><span class="label">Timers:</span> 2 × 16-bit</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-mmu"></div>
+                <h3>MMU</h3>
+                <p>Memory Management Unit / PLA. The traffic controller deciding which chip responds to each address.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 906114 / 252535</li>
+                    <li><span class="label">Function:</span> Address decode</li>
+                    <li><span class="label">Controls:</span> Bank switching</li>
+                    <li><span class="label">Note:</span> Runs hot, common failure</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-container" id="chip-rom"></div>
+                <h3>ROM</h3>
+                <p>Contains KERNAL OS, BASIC interpreter, and character sets. Combined in one chip on C64C.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 251913-01 (C64C)</li>
+                    <li><span class="label">KERNAL:</span> 8 KB ($E000-$FFFF)</li>
+                    <li><span class="label">BASIC:</span> 8 KB ($A000-$BFFF)</li>
+                    <li><span class="label">CHAROM:</span> 4 KB ($D000-$DFFF)</li>
+                </ul>
+            </div>
+            
+            <div class="chip-card">
+                <div class="chip-3d-dual-container">
+                    <div class="chip-3d-container chip-3d-small" id="chip-ram1"></div>
+                    <div class="chip-3d-container chip-3d-small" id="chip-ram2"></div>
+                </div>
+                <h3>RAM</h3>
+                <p>Two 4464 chips providing 64KB of dynamic RAM, shared between CPU and VIC-II.</p>
+                <ul>
+                    <li><span class="label">Part:</span> 4464 × 2 (C64C)</li>
+                    <li><span class="label">Size:</span> 64 KB total</li>
+                    <li><span class="label">Type:</span> Dynamic RAM</li>
+                    <li><span class="label">Shared:</span> CPU & VIC-II</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/hardware.js') }}"></script>
+<script type="module">
+    import { initChip3DScene, renderChipToImage, C64_CHIPS } from '/static/js/chip3d.js';
+    
+    // Chip configuration for hardware page (matching C64C motherboard photo)
+    const chipConfigs = {
+        'chip-cpu': C64_CHIPS.CPU_6510,
+        'chip-vic': C64_CHIPS.VIC_6569,
+        'chip-sid': C64_CHIPS.SID_6581,
+        'chip-cia1': C64_CHIPS.CIA_6526,
+        'chip-cia2': C64_CHIPS.CIA_6526,
+        'chip-mmu': C64_CHIPS.MMU,
+        'chip-rom': C64_CHIPS.ROM_COMBINED,
+        'chip-ram1': C64_CHIPS.RAM_4464,
+        'chip-ram2': C64_CHIPS.RAM_4464
+    };
+    
+    // Initialize all 3D chips on the chip cards
+    Object.entries(chipConfigs).forEach(([containerId, config]) => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            initChip3DScene(container, {
+                textureOptions: config.textureOptions,
+                chipOptions: config.chipOptions,
+                autoRotate: true,
+                autoRotateSpeed: 0.5,
+                cameraPosition: { x: 1.2, y: 1.0, z: 1.5 }
+            });
+        }
+    });
+    
+    // Pre-render chips for the 2D simulation canvas (Short Board 250469 layout)
+    (async () => {
+        const simulatorChips = {
+            'CPU_6510': C64_CHIPS.CPU_6510,
+            'VIC_6569': C64_CHIPS.VIC_6569,
+            'SID_6581': C64_CHIPS.SID_6581,
+            'CIA_6526': C64_CHIPS.CIA_6526,
+            'MMU': C64_CHIPS.MMU,           // Replaces PLA on Short Board
+            'RAM_4464': C64_CHIPS.RAM_4464, // 4464 chips at U9/U10
+            'ROM_COMBINED': C64_CHIPS.ROM_COMBINED  // Super ROM 251913-01
+        };
+        
+        // Render each chip to an image at high resolution for clarity
+        const chipImagesForSimulator = {};
+        for (const [key, config] of Object.entries(simulatorChips)) {
+            try {
+                chipImagesForSimulator[key] = await renderChipToImage({
+                    textureOptions: config.textureOptions,
+                    chipOptions: config.chipOptions,
+                    width: 512,  // High resolution for crisp text
+                    height: 512,
+                    cameraPosition: { x: 0, y: 2.5, z: 0 }, // Top-down view
+                    cameraLookAt: { x: 0, y: 0, z: 0 }
+                });
+            } catch (e) {
+                console.warn(`Failed to render chip ${key}:`, e);
+            }
+        }
+        
+        // Pass rendered images to the hardware.js simulation
+        if (window.setChipImages) {
+            window.setChipImages(chipImagesForSimulator);
+        }
+    })();
+</script>
+{% endblock %}

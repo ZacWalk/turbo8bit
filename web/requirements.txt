@@ -1,0 +1,8 @@
+Flask==3.0.0
+gunicorn==21.2.0
+google-auth==2.25.2
+requests==2.31.0
+
+# Development/Testing dependencies (not deployed to GAE)
+# pytest==7.4.3
+# py_mini_racer==0.6.0

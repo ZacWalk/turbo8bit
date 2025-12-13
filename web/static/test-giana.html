@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Great Giana Sisters - jsSID Test</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a2e;
+            color: #00ff00;
+            padding: 40px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff;
+        }
+        .controls {
+            margin: 30px 0;
+        }
+        button {
+            background: #16213e;
+            color: #00ff00;
+            border: 2px solid #00ff00;
+            padding: 15px 30px;
+            font-size: 18px;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+            margin-right: 10px;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: #00ff00;
+            color: #1a1a2e;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            background: #16213e;
+            border: 1px solid #00ff00;
+        }
+        .info {
+            margin-top: 20px;
+            color: #888;
+            font-size: 14px;
+        }
+        select {
+            background: #16213e;
+            color: #00ff00;
+            border: 2px solid #00ff00;
+            padding: 10px;
+            font-size: 16px;
+            font-family: 'Courier New', monospace;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 Great Giana Sisters</h1>
+    <p>SID Music Test using jsSID (TinySID engine)</p>
+    
+    <div class="controls">
+        <label for="trackSelect">Track: </label>
+        <select id="trackSelect">
+            <option value="0">Track 1 (Title)</option>
+            <option value="1">Track 2</option>
+            <option value="2">Track 3</option>
+            <option value="3">Track 4</option>
+            <option value="4">Track 5</option>
+            <option value="5">Track 6</option>
+            <option value="6">Track 7</option>
+            <option value="7">Track 8</option>
+            <option value="8">Track 9</option>
+            <option value="9">Track 10</option>
+            <option value="10">Track 11</option>
+            <option value="11">Track 12</option>
+            <option value="12">Track 13</option>
+        </select>
+        <br><br>
+        <button id="playBtn" disabled>▶ Play</button>
+        <button id="stopBtn" disabled>⬛ Stop</button>
+    </div>
+    
+    <div class="status" id="status">Loading jsSID...</div>
+    
+    <div class="info">
+        <p>This page uses the jsSID library with TinySID emulation to play the SID file.</p>
+        <p>The Great Giana Sisters has 13 sub-songs (tracks).</p>
+    </div>
+
+    <!-- Load jsSID scripts - pico must be LAST per jsSID docs -->
+    <script src="/static/js/jssid/stream.js"></script>
+    <script src="/static/js/jssid/jssid.core.js"></script>
+    <script src="/static/js/jssid/jssid.tinysid.js"></script>
+    <script src="/static/js/jssid/jssid.mos6510.js"></script>
+    <script src="/static/js/jssid/jssid.sidplayer.js"></script>
+    <script src="/static/js/jssid/pico.dev.js"></script>
+    
+    <script>
+        let player = null;
+        const playBtn = document.getElementById('playBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const trackSelect = document.getElementById('trackSelect');
+        const status = document.getElementById('status');
+        
+        async function init() {
+            try {
+                status.textContent = 'Loading SID file...';
+                
+                // Fetch the SID file
+                const response = await fetch('/static/sid/Great_Giana_Sisters.sid');
+                const arrayBuffer = await response.arrayBuffer();
+                const data = new Uint8Array(arrayBuffer);
+                
+                // Convert to string for jsSID
+                let sidDataStr = '';
+                for (let i = 0; i < data.length; i++) {
+                    sidDataStr += String.fromCharCode(data[i]);
+                }
+                
+                // Create player
+                player = new jsSID.SIDPlayer({ 
+                    quality: 'tinysid', 
+                    sampleRate: 44100 
+                });
+                
+                player.loadFileFromData(sidDataStr);
+                
+                // Update track selector based on actual subsongs
+                const numTracks = player.sidfile.subsongs + 1;
+                trackSelect.innerHTML = '';
+                for (let i = 0; i < numTracks; i++) {
+                    const opt = document.createElement('option');
+                    opt.value = i;
+                    opt.textContent = `Track ${i + 1}`;
+                    trackSelect.appendChild(opt);
+                }
+                
+                status.textContent = `Loaded: ${player.sidfile.name} by ${player.sidfile.author} (${numTracks} tracks)`;
+                
+                playBtn.disabled = false;
+                stopBtn.disabled = false;
+                
+            } catch (err) {
+                status.textContent = 'Error: ' + err.message;
+                console.error(err);
+            }
+        }
+        
+        playBtn.addEventListener('click', () => {
+            console.log('Play clicked');
+            if (player) {
+                const track = parseInt(trackSelect.value);
+                console.log('Changing to track:', track);
+                player.changeTrack(track);
+                console.log('Calling play()');
+                player.play();
+                console.log('Player ready:', player.ready, 'play_active:', player.play_active);
+                status.textContent = `Playing Track ${track + 1}...`;
+            }
+        });
+        
+        stopBtn.addEventListener('click', () => {
+            if (player) {
+                player.stop();
+                status.textContent = 'Stopped';
+            }
+        });
+        
+        trackSelect.addEventListener('change', () => {
+            if (player && player.ready) {
+                const track = parseInt(trackSelect.value);
+                player.changeTrack(track);
+                player.play();
+                status.textContent = `Playing Track ${track + 1}...`;
+            }
+        });
+        
+        // Initialize when page loads
+        init();
+    </script>
+</body>
+</html>

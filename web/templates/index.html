@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+
+{% block title %}Commodore 64 Emulator - Turbo8bit{% endblock %}
+
+{% block content %}
+<div class="c64-page">
+    <!-- Emulator Panel -->
+    <div class="c64-emulator-column">
+        <div class="c64-emulator-panel">
+            <canvas id="screen" width="384" height="272"></canvas>
+            
+            <div class="c64-controls">
+                <button onclick="emulator.typeText('RUN\n')">RUN</button>
+                <button onclick="emulator.machine.pressStop()">STOP</button>
+                <button onclick="emulator.typeText('LIST\n')">LIST</button>
+                <button id="muteBtn" class="mute-btn muted" onclick="toggleMute()">🔇 MUTED</button>
+                <button class="reset-btn" onclick="emulator.reset()">RESET</button>
+            </div>
+            
+            <div class="c64-joystick-controls">
+                <span class="joystick-label">Joystick:</span>
+                <button id="joy1Btn" onclick="toggleJoystick(1)">JOY 1</button>
+                <button id="joy2Btn" onclick="toggleJoystick(2)">JOY 2</button>
+                <span class="joystick-hint">(Arrow keys + Space = Fire)</span>
+            </div>
+            
+            <div class="c64-info">
+                <p>Type commands on your keyboard. Press <strong>Escape</strong> (RUN/STOP) to break loops.</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- BASIC Editor Panel -->
+    <div class="c64-editor-panel">
+        <div class="sample-selector">
+            <span class="sample-label">Load BASIC Sample:</span>
+            <select id="sampleSelect" onchange="loadSelectedSample()">
+            </select>
+        </div>
+        
+        <div id="basic-editor"></div>
+    </div>
+</div>
+
+<!-- BASIC Quick Start Guide -->
+<div class="basic-quickstart">
+    <h2>Commodore 64 BASIC Quick Start</h2>
+    
+    <p>The Commodore 64 uses <strong>BASIC</strong> (Beginner's All-purpose Symbolic Instruction Code). You can interact in two ways:</p>
+    
+    <ul class="intro-list">
+        <li><strong>Direct Mode:</strong> Type a command without a line number and it executes immediately.</li>
+        <li><strong>Program Mode:</strong> Use line numbers (e.g., <code class="basic-code"><span class="line-num">10</span> <span class="keyword">PRINT</span> <span class="string">"HI"</span></code>). The computer stores these instructions and runs them in order when you type <code class="basic-code"><span class="keyword">RUN</span></code>.</li>
+    </ul>
+    
+    <div class="quickstart-columns">
+        <div class="quickstart-col">
+            <h3>System Commands</h3>
+            <table class="basic-commands">
+                <tr><td><code class="basic-code"><span class="keyword">NEW</span></code></td><td>Erases program from memory.</td></tr>
+                <tr><td><code class="basic-code"><span class="keyword">RUN</span></code></td><td>Executes the current program.</td></tr>
+                <tr><td><code class="basic-code"><span class="keyword">LIST</span></code></td><td>Displays program lines on screen.</td></tr>
+            </table>
+            
+            <h3>Variables</h3>
+            <p>Only the first two characters of a variable name are significant.</p>
+            <ul>
+                <li><strong>Floats:</strong> <code class="basic-code"><span class="variable">A</span> = <span class="number">5.5</span></code></li>
+                <li><strong>Integers:</strong> <code class="basic-code"><span class="variable">A%</span> = <span class="number">10</span></code></li>
+                <li><strong>Strings:</strong> <code class="basic-code"><span class="variable">A$</span> = <span class="string">"HELLO"</span></code></li>
+            </ul>
+            
+            <h3>Input &amp; Output</h3>
+            <ul>
+                <li><code class="basic-code"><span class="keyword">PRINT</span></code> — Output to screen<br>
+                    <code class="basic-code"><span class="line-num">10</span> <span class="keyword">PRINT</span> <span class="string">"HELLO"</span></code></li>
+                <li><code class="basic-code"><span class="keyword">INPUT</span></code> — Get user input<br>
+                    <code class="basic-code"><span class="line-num">20</span> <span class="keyword">INPUT</span> <span class="string">"NAME"</span>; <span class="variable">N$</span></code></li>
+                <li><code class="basic-code"><span class="keyword">GET</span></code> — Read single keypress<br>
+                    <code class="basic-code"><span class="line-num">30</span> <span class="keyword">GET</span> <span class="variable">K$</span></code></li>
+            </ul>
+        </div>
+        
+        <div class="quickstart-col">
+            <h3>Program Flow</h3>
+            <ul>
+                <li><code class="basic-code"><span class="keyword">GOTO</span></code> — Jump to a line<br>
+                    <code class="basic-code"><span class="line-num">50</span> <span class="keyword">GOTO</span> <span class="number">10</span></code></li>
+                <li><code class="basic-code"><span class="keyword">GOSUB</span></code> / <code class="basic-code"><span class="keyword">RETURN</span></code> — Call subroutine<br>
+                    <code class="basic-code"><span class="line-num">60</span> <span class="keyword">GOSUB</span> <span class="number">200</span></code></li>
+                <li><code class="basic-code"><span class="keyword">IF</span>...<span class="keyword">THEN</span></code> — Conditional<br>
+                    <code class="basic-code"><span class="line-num">40</span> <span class="keyword">IF</span> <span class="variable">A</span> &gt; <span class="number">10</span> <span class="keyword">THEN</span> <span class="keyword">PRINT</span> <span class="string">"BIG"</span></code></li>
+            </ul>
+            
+            <h3>Loops</h3>
+            <ul>
+                <li><code class="basic-code"><span class="keyword">FOR</span>...<span class="keyword">NEXT</span></code> — Counted loop<br>
+<pre class="basic-code"><span class="line-num">10</span> <span class="keyword">FOR</span> <span class="variable">I</span> = <span class="number">1</span> <span class="keyword">TO</span> <span class="number">5</span>
+<span class="line-num">20</span> <span class="keyword">PRINT</span> <span class="variable">I</span>
+<span class="line-num">30</span> <span class="keyword">NEXT</span> <span class="variable">I</span></pre></li>
+            </ul>
+            
+            <h3>Graphics &amp; Sound</h3>
+            <ul>
+                <li><code class="basic-code"><span class="keyword">POKE</span></code> — Write to memory<br>
+                    <code class="basic-code"><span class="keyword">POKE</span> <span class="number">53280</span>, <span class="number">0</span></code> <em>(border black)</em></li>
+                <li><code class="basic-code"><span class="keyword">PEEK</span></code> — Read from memory<br>
+                    <code class="basic-code"><span class="variable">X</span> = <span class="keyword">PEEK</span>(<span class="number">53280</span>)</code></li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+import { C64Emulator } from "{{ url_for('static', filename='js/emulator/emulator.js') }}";
+import { CodeEditor } from "{{ url_for('static', filename='js/emulator/editor.js') }}";
+import { BASIC_START } from "{{ url_for('static', filename='js/emulator/basic-tokenizer.js') }}";
+
+// Example metadata loaded from JSON
+let examplesIndex = {};
+let examplesByKey = {};
+
+// Fetch and populate sample selector from JSON index
+async function initExamples() {
+    const response = await fetch("{{ url_for('static', filename='basic/index.json') }}");
+    const data = await response.json();
+    examplesIndex = data;
+    
+    // Build lookup by ID
+    for (const example of data.examples) {
+        examplesByKey[example.id] = example;
+    }
+    
+    // Populate dropdown grouped by category
+    const select = document.getElementById('sampleSelect');
+    const categories = {};
+    
+    for (const example of data.examples) {
+        if (!categories[example.category]) {
+            categories[example.category] = [];
+        }
+        categories[example.category].push(example);
+    }
+    
+    for (const [category, examples] of Object.entries(categories)) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = category;
+        for (const example of examples) {
+            const option = document.createElement('option');
+            option.value = example.id;
+            option.textContent = example.title;
+            optgroup.appendChild(option);
+        }
+        select.appendChild(optgroup);
+    }
+    
+    // Load default example
+    const defaultKey = 'helloWorld';
+    const code = await loadExampleCode(defaultKey);
+    editor.setValue(code);
+    document.getElementById('sampleSelect').value = defaultKey;
+    currentExampleKey = defaultKey;
+}
+
+// Load example code from file
+async function loadExampleCode(id) {
+    const example = examplesByKey[id];
+    if (!example) return '';
+    const response = await fetch("{{ url_for('static', filename='basic/') }}" + example.file);
+    return await response.text();
+}
+
+// Initialize emulator
+const emulator = new C64Emulator('screen', { audioEnabled: false });
+emulator.start();
+emulator.enableDragAndDrop();
+window.emulator = emulator;
+
+// Initialize BASIC editor
+const editor = new CodeEditor('#basic-editor', {
+    language: 'basic',
+    fontSize: 13,
+    onLoad: (result) => {
+        loadBasicProgram(result);
+    }
+});
+
+// Track which example is currently loaded
+let currentExampleKey = 'helloWorld';
+
+// Initialize examples after editor is ready
+initExamples();
+window.editor = editor;
+
+// Load sample from dropdown
+async function loadSelectedSample() {
+    const select = document.getElementById('sampleSelect');
+    const id = select.value;
+    const example = examplesByKey[id];
+    if (example) {
+        currentExampleKey = id;
+        const code = await loadExampleCode(id);
+        editor.setValue(code);
+        // Disable error highlighting for direct mode examples
+        editor.setHighlightErrors(!example.direct);
+    }
+}
+window.loadSelectedSample = loadSelectedSample;
+
+//
+// Load a tokenized BASIC program directly into C64 memory
+// This is much faster than typing it in character by character
+//
+async function loadBasicProgram(result) {
+    // Check if this is a direct mode example - type commands instead of tokenizing
+    const currentExample = examplesByKey[currentExampleKey];
+    if (currentExample && currentExample.direct) {
+        // Type direct mode commands into the emulator
+        const code = await loadExampleCode(currentExampleKey);
+        const lines = code.split('\n').filter(l => l.trim());
+        let delay = 100;
+        for (const line of lines) {
+            setTimeout(() => {
+                emulator.typeText(line + '\n');
+            }, delay);
+            delay += 1500; // Wait for each command to execute
+        }
+        return;
+    }
+    
+    if (result.errors.length > 0) {
+        const errors = result.errors.filter(e => e.type === 'error');
+        if (errors.length > 0) {
+            alert('Cannot load program with errors:\n' + errors.map(e => `Line ${e.line}: ${e.message}`).join('\n'));
+            return;
+        }
+    }
+    
+    const bytes = result.bytes;
+    if (bytes.length < 4) {
+        alert('No program to load');
+        return;
+    }
+    
+    // Stop any running program
+    emulator.machine.pressStop();
+    
+    // Wait a moment then load the program
+    setTimeout(() => {
+        // Load the PRG data (bytes already include the load address header)
+        const loadAddress = emulator.machine.loadPrg(bytes);
+        
+        // Calculate end of program
+        const endAddress = loadAddress + bytes.length - 2; // -2 for PRG header
+        
+        // Update BASIC pointers in zero page/low memory
+        // These are essential for BASIC to recognize the loaded program
+        const ram = emulator.machine.ram;
+        
+        // $2B-$2C: Start of BASIC (TXTTAB) - should point to $0801
+        ram[0x2B] = BASIC_START & 0xFF;
+        ram[0x2C] = (BASIC_START >> 8) & 0xFF;
+        
+        // $2D-$2E: Start of variables (VARTAB) - points to end of program
+        ram[0x2D] = endAddress & 0xFF;
+        ram[0x2E] = (endAddress >> 8) & 0xFF;
+        
+        // $2F-$30: Start of arrays (ARYTAB) - same as VARTAB initially
+        ram[0x2F] = endAddress & 0xFF;
+        ram[0x30] = (endAddress >> 8) & 0xFF;
+        
+        // $31-$32: End of arrays (STREND) - same as VARTAB initially
+        ram[0x31] = endAddress & 0xFF;
+        ram[0x32] = (endAddress >> 8) & 0xFF;
+        
+        console.log(`BASIC program loaded: $${loadAddress.toString(16).padStart(4, '0')}-$${endAddress.toString(16).padStart(4, '0')} (${bytes.length - 2} bytes)`);
+        
+        // Type RUN to execute
+        setTimeout(() => {
+            emulator.typeText('RUN\n');
+        }, 100);
+    }, 100);
+}
+window.loadBasicProgram = loadBasicProgram;
+
+let isMuted = true;
+
+function updateMuteButton() {
+    const btn = document.getElementById('muteBtn');
+    if (isMuted) {
+        btn.textContent = '🔇 MUTED';
+        btn.classList.add('muted');
+    } else {
+        btn.textContent = '🔊 SOUND';
+        btn.classList.remove('muted');
+    }
+}
+
+function toggleMute() {
+    isMuted = !isMuted;
+    updateMuteButton();
+    if (!isMuted) {
+        emulator.enableAudio();
+    } else {
+        emulator.disableAudio();
+    }
+}
+window.toggleMute = toggleMute;
+
+function toggleJoystick(port) {
+    const isActive = emulator.toggleJoystick(port);
+    
+    // Update button styles
+    const joy1Btn = document.getElementById('joy1Btn');
+    const joy2Btn = document.getElementById('joy2Btn');
+    
+    joy1Btn.classList.remove('active');
+    joy2Btn.classList.remove('active');
+    
+    if (isActive) {
+        if (port === 1) {
+            joy1Btn.classList.add('active');
+        } else {
+            joy2Btn.classList.add('active');
+        }
+    }
+}
+window.toggleJoystick = toggleJoystick;
+
+// Keyboard handling - prevent editor from capturing when focused on emulator
+document.addEventListener('keydown', e => {
+    // Don't capture keys when typing in the editor
+    if (e.target.classList.contains('editor-textarea')) {
+        return;
+    }
+    emulator.handleKeyPress(e);
+});
+
+document.addEventListener('keyup', e => {
+    if (e.target.classList.contains('editor-textarea')) {
+        return;
+    }
+    emulator.handleKeyRelease(e);
+});
+
+window.addEventListener('load', () => {
+    document.body.tabIndex = 0;
+    document.body.focus();
+});
+</script>
+{% endblock %}

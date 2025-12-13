@@ -1,0 +1,83 @@
+{
+  "examples": [
+    {
+      "id": "directModeCalc",
+      "title": "Direct Mode Calculator",
+      "category": "Getting Started",
+      "file": "direct-mode-calc.bas",
+      "direct": true
+    },
+    {
+      "id": "helloWorld",
+      "title": "Hello World",
+      "category": "Getting Started",
+      "file": "hello-world.bas"
+    },
+    {
+      "id": "countToTen",
+      "title": "Count to 10",
+      "category": "Getting Started",
+      "file": "count-to-ten.bas"
+    },
+    {
+      "id": "diceRoller",
+      "title": "Dice Roller",
+      "category": "Getting Started",
+      "file": "dice-roller.bas"
+    },
+    {
+      "id": "inputName",
+      "title": "Name Input",
+      "category": "Getting Started",
+      "file": "input-name.bas"
+    },
+    {
+      "id": "infiniteLoop",
+      "title": "Infinite Loop",
+      "category": "Getting Started",
+      "file": "infinite-loop.bas"
+    },
+    {
+      "id": "borderFlash",
+      "title": "Border Flasher",
+      "category": "Graphics",
+      "file": "border-flasher.bas"
+    },
+    {
+      "id": "tenPrint",
+      "title": "Maze One-liner",
+      "category": "Graphics",
+      "file": "maze-oneliner.bas"
+    },
+    {
+      "id": "balloon",
+      "title": "Balloon Sprite",
+      "category": "Graphics",
+      "file": "balloon-sprite.bas"
+    },
+    {
+      "id": "simpleBeep",
+      "title": "SID Beep",
+      "category": "Sound",
+      "file": "sid-beep.bas"
+    },
+    {
+      "id": "ascendingScale",
+      "title": "Ascending Scale",
+      "category": "Sound",
+      "file": "ascending-scale.bas"
+    },
+    {
+      "id": "multiplicationTable",
+      "title": "Times Tables",
+      "category": "Math",
+      "file": "times-tables.bas"
+    },
+    {
+      "id": "joystickTester",
+      "title": "Joystick Tester",
+      "category": "Input",
+      "file": "joystick-tester.bas"
+    }
+  ]
+}

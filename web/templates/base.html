@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Turbo8bit{% endblock %}</title>
+    <meta name="description" content="Learn about the Commodore 64 by coding in BASIC and 6502 assembler.">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Press+Start+2P&display=swap" rel="stylesheet">
+    {% if google_client_id %}
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    {% endif %}
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <header class="site-header">
+        <a href="/" class="c64-badge">
+            <span class="c64-text-logo">TURBO</span>
+            <span class="c64-stripes">
+                <span class="stripe red"></span>
+                <span class="stripe orange"></span>
+                <span class="stripe yellow"></span>
+                <span class="stripe green"></span>
+                <span class="stripe blue"></span>
+                <span class="stripe violet"></span>
+            </span>
+            <span class="c64-model-number">8bit</span>
+        </a>
+        <nav class="main-nav">
+            <a href="/">BASIC</a>
+            <a href="/asm">Assembly</a>
+            <a href="/hardware">Hardware</a>
+            <a href="/memmap">Memory</a>
+            <a href="/sid">SID</a>
+            {% if user.is_admin %}<a href="/demo">Demo</a>{% endif %}
+            <a href="/about">About</a>
+        </nav>
+        <div class="user-auth">
+            {% if user.email %}
+                <span class="user-name">{{ user.name or user.email }}</span>
+                <a href="/auth/logout" class="auth-btn">Logout</a>
+            {% elif google_client_id %}
+                <div id="g_id_onload"
+                    data-client_id="{{ google_client_id }}"
+                    data-login_uri="/auth/google"
+                    data-auto_prompt="false">
+                </div>
+                <div class="g_id_signin"
+                    data-type="standard"
+                    data-size="small"
+                    data-theme="outline"
+                    data-text="sign_in_with"
+                    data-shape="rectangular"
+                    data-logo_alignment="left">
+                </div>
+            {% endif %}
+        </div>
+    </header>
+    
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <footer class="site-footer">
+        <p class="ready-prompt">READY.</p>
+        <p class="footer-text">© 2025 Turbo8bit - Learn about the Commodore 64 by coding in BASIC and 6502 assembler</p>
+        <p class="footer-tagline">**** COMMODORE 64 BASIC V2 ****</p>
+    </footer>
+    
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

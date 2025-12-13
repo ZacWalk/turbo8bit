@@ -1,0 +1,708 @@
+{% extends "base.html" %}
+
+{% block title %}6502 Assembly - Turbo8bit{% endblock %}
+
+{% block content %}
+<div class="c64-page">
+    <!-- Emulator Panel -->
+    <div class="c64-emulator-column">
+        <div class="c64-emulator-panel">
+            
+            <canvas id="screen" width="384" height="272"></canvas>
+            
+            <div class="c64-controls asm-controls">
+                <button id="muteBtn" class="mute-btn muted" onclick="toggleMute()">🔇 MUTED</button>
+                <button class="reset-btn" onclick="emulator.reset()">RESET</button>
+            </div>
+            
+            <!-- Register display -->
+            <div class="register-display" id="registerDisplay">
+                <div class="register-row">
+                    <span class="reg-label">PC:</span><span id="regPC" class="reg-value">$0800</span>
+                    <span class="reg-label">A:</span><span id="regA" class="reg-value">$00</span>
+                    <span class="reg-label">X:</span><span id="regX" class="reg-value">$00</span>
+                    <span class="reg-label">Y:</span><span id="regY" class="reg-value">$00</span>
+                    <span class="reg-label">SP:</span><span id="regSP" class="reg-value">$FF</span>
+                </div>
+                <div class="register-row flags-row">
+                    <span class="reg-label">Flags:</span>
+                    <span id="flagN" class="flag-bit" title="Negative">N</span>
+                    <span id="flagV" class="flag-bit" title="Overflow">V</span>
+                    <span class="flag-bit dim">-</span>
+                    <span id="flagB" class="flag-bit" title="Break">B</span>
+                    <span id="flagD" class="flag-bit" title="Decimal">D</span>
+                    <span id="flagI" class="flag-bit" title="Interrupt">I</span>
+                    <span id="flagZ" class="flag-bit" title="Zero">Z</span>
+                    <span id="flagC" class="flag-bit" title="Carry">C</span>
+                </div>
+                <div class="register-row source-row">
+                    <span class="reg-label">Instr:</span>
+                    <span id="sourceLine" class="source-line">-</span>
+                </div>
+            </div>
+            
+            <div class="c64-info">
+                <p>Write assembly code, step through instructions, and watch the CPU registers change in real-time.</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Assembly Editor Panel -->
+    <div class="c64-editor-panel">
+        <div class="sample-selector">
+            <span class="sample-label">Load Assembly Sample:</span>
+            <select id="sampleSelect" onchange="loadSelectedSample()">
+            </select>
+        </div>
+        
+        <div id="asm-editor"></div>
+    </div>
+</div>
+
+<!-- Assembly Quick Start Guide -->
+<div class="asm-quickstart">
+    <h2>6502 Assembly Quick Start</h2>
+    
+    <p>The 6502 is an 8-bit processor with three registers: <strong>A</strong> (accumulator), <strong>X</strong> and <strong>Y</strong> (index registers). Assembly instructions are 1-3 bytes.</p>
+    
+    <div class="quickstart-columns">
+        <div class="quickstart-col">
+            <h3>Load &amp; Store</h3>
+            <ul>
+                <li><code class="asm-code"><span class="mnemonic">LDA</span></code> — Load into A<br>
+                    <code class="asm-code"><span class="mnemonic">LDA</span> <span class="number">#$05</span></code> <em>(immediate)</em><br>
+                    <code class="asm-code"><span class="mnemonic">LDA</span> <span class="number">$D020</span></code> <em>(absolute)</em></li>
+                <li><code class="asm-code"><span class="mnemonic">LDX</span></code> / <code class="asm-code"><span class="mnemonic">LDY</span></code> — Load into X/Y</li>
+                <li><code class="asm-code"><span class="mnemonic">STA</span></code> / <code class="asm-code"><span class="mnemonic">STX</span></code> / <code class="asm-code"><span class="mnemonic">STY</span></code> — Store to memory</li>
+            </ul>
+            
+            <h3>Arithmetic</h3>
+            <ul>
+                <li><code class="asm-code"><span class="mnemonic">ADC</span></code> — Add with carry<br>
+                    <code class="asm-code"><span class="mnemonic">CLC</span></code> then <code class="asm-code"><span class="mnemonic">ADC</span> <span class="number">#$10</span></code></li>
+                <li><code class="asm-code"><span class="mnemonic">SBC</span></code> — Subtract with borrow<br>
+                    <code class="asm-code"><span class="mnemonic">SEC</span></code> then <code class="asm-code"><span class="mnemonic">SBC</span> <span class="number">#$01</span></code></li>
+                <li><code class="asm-code"><span class="mnemonic">INC</span></code> / <code class="asm-code"><span class="mnemonic">DEC</span></code> — Increment/decrement memory</li>
+                <li><code class="asm-code"><span class="mnemonic">INX</span></code> / <code class="asm-code"><span class="mnemonic">DEX</span></code> / <code class="asm-code"><span class="mnemonic">INY</span></code> / <code class="asm-code"><span class="mnemonic">DEY</span></code> — Inc/dec registers</li>
+            </ul>
+            
+            <h3>Logic &amp; Shifts</h3>
+            <ul>
+                <li><code class="asm-code"><span class="mnemonic">AND</span></code> / <code class="asm-code"><span class="mnemonic">ORA</span></code> / <code class="asm-code"><span class="mnemonic">EOR</span></code> — Bitwise AND/OR/XOR</li>
+                <li><code class="asm-code"><span class="mnemonic">ASL</span></code> / <code class="asm-code"><span class="mnemonic">LSR</span></code> — Shift left/right</li>
+                <li><code class="asm-code"><span class="mnemonic">ROL</span></code> / <code class="asm-code"><span class="mnemonic">ROR</span></code> — Rotate through carry</li>
+            </ul>
+        </div>
+        
+        <div class="quickstart-col">
+            <h3>Compare &amp; Branch</h3>
+            <ul>
+                <li><code class="asm-code"><span class="mnemonic">CMP</span></code> / <code class="asm-code"><span class="mnemonic">CPX</span></code> / <code class="asm-code"><span class="mnemonic">CPY</span></code> — Compare (sets flags)</li>
+                <li><code class="asm-code"><span class="mnemonic">BEQ</span></code> / <code class="asm-code"><span class="mnemonic">BNE</span></code> — Branch if equal/not equal</li>
+                <li><code class="asm-code"><span class="mnemonic">BCC</span></code> / <code class="asm-code"><span class="mnemonic">BCS</span></code> — Branch if carry clear/set</li>
+                <li><code class="asm-code"><span class="mnemonic">BMI</span></code> / <code class="asm-code"><span class="mnemonic">BPL</span></code> — Branch if minus/plus</li>
+            </ul>
+            
+            <h3>Subroutines &amp; Stack</h3>
+            <ul>
+                <li><code class="asm-code"><span class="mnemonic">JSR</span></code> — Jump to subroutine<br>
+                    Pushes return address (PC+2) to stack, then jumps</li>
+                <li><code class="asm-code"><span class="mnemonic">RTS</span></code> — Return from subroutine<br>
+                    Pops address from stack, jumps to address+1</li>
+                <li><code class="asm-code"><span class="mnemonic">PHA</span></code> / <code class="asm-code"><span class="mnemonic">PLA</span></code> — Push/pull A to stack</li>
+                <li><code class="asm-code"><span class="mnemonic">PHP</span></code> / <code class="asm-code"><span class="mnemonic">PLP</span></code> — Push/pull flags to stack</li>
+            </ul>
+            <p><em>Stack lives at $0100-$01FF, grows downward. SP starts at $FF.</em></p>
+            
+            <h3>Common Patterns</h3>
+<pre class="asm-code"><span class="comment">; Loop 10 times</span>
+    <span class="mnemonic">LDX</span> <span class="number">#$0A</span>
+<span class="label">loop:</span>
+    <span class="mnemonic">DEX</span>
+    <span class="mnemonic">BNE</span> <span class="label">loop</span>
+    <span class="mnemonic">RTS</span></pre>
+        </div>
+        
+        <div class="quickstart-col">
+            <h3>Interrupts</h3>
+            <p><em>Interrupts pause the CPU to run a handler routine, then resume — used for timing, keyboard, and raster effects.</em></p>
+            <ul>
+                <li><code class="asm-code"><span class="mnemonic">SEI</span></code> — Disable interrupts (set I flag)</li>
+                <li><code class="asm-code"><span class="mnemonic">CLI</span></code> — Enable interrupts (clear I flag)</li>
+                <li><code class="asm-code"><span class="mnemonic">RTI</span></code> — Return from interrupt</li>
+            </ul>
+            <p><em>IRQ vector at $0314-$0315 (KERNAL), hardware at $FFFE.</em></p>
+            
+            <h3>CIA Timer (IRQ)</h3>
+            <ul>
+                <li><code class="asm-code"><span class="number">$DC04</span>/<span class="number">$DC05</span></code> — Timer A latch (lo/hi)</li>
+                <li><code class="asm-code"><span class="number">$DC0D</span></code> — Interrupt control<br>
+                    Write <code class="asm-code"><span class="number">#$81</span></code> to enable Timer A IRQ<br>
+                    Write <code class="asm-code"><span class="number">#$7F</span></code> to disable all IRQs</li>
+                <li><code class="asm-code"><span class="number">$DC0E</span></code> — Control register A<br>
+                    Bit 0: Start timer, Bit 3: One-shot mode</li>
+            </ul>
+            
+            <h3>VIC-II Raster IRQ</h3>
+            <ul>
+                <li><code class="asm-code"><span class="number">$D012</span></code> — Raster line (bits 0-7)</li>
+                <li><code class="asm-code"><span class="number">$D011</span></code> — Bit 7 = raster line bit 8</li>
+                <li><code class="asm-code"><span class="number">$D019</span></code> — IRQ status (write <code class="asm-code"><span class="number">#$01</span></code> to ack)</li>
+                <li><code class="asm-code"><span class="number">$D01A</span></code> — IRQ enable (bit 0 = raster)</li>
+            </ul>
+            
+            <h3>Raster IRQ Setup</h3>
+<pre class="asm-code">    <span class="mnemonic">SEI</span>
+    <span class="mnemonic">LDA</span> <span class="number">#$7F</span>
+    <span class="mnemonic">STA</span> <span class="number">$DC0D</span>     <span class="comment">; Disable CIA IRQ</span>
+    <span class="mnemonic">LDA</span> <span class="number">#$32</span>
+    <span class="mnemonic">STA</span> <span class="number">$D012</span>     <span class="comment">; Raster line 50</span>
+    <span class="mnemonic">LDA</span> <span class="number">#$01</span>
+    <span class="mnemonic">STA</span> <span class="number">$D01A</span>     <span class="comment">; Enable raster IRQ</span>
+    <span class="mnemonic">LDA</span> <span class="number">#&lt;handler</span>
+    <span class="mnemonic">STA</span> <span class="number">$0314</span>
+    <span class="mnemonic">LDA</span> <span class="number">#&gt;handler</span>
+    <span class="mnemonic">STA</span> <span class="number">$0315</span>
+    <span class="mnemonic">CLI</span></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+import { C64Emulator } from "{{ url_for('static', filename='js/emulator/emulator.js') }}";
+import { CodeEditor } from "{{ url_for('static', filename='js/emulator/editor.js') }}";
+import { Assembler, disassembleInstruction } from "{{ url_for('static', filename='js/emulator/assembler.js') }}";
+import { C64Debugger, DebuggerState } from "{{ url_for('static', filename='js/emulator/debugger.js') }}";
+import { FLAG_N, FLAG_V, FLAG_B, FLAG_D, FLAG_I, FLAG_Z, FLAG_C } from "{{ url_for('static', filename='js/emulator/mos6510.js') }}";
+
+// Example metadata loaded from JSON
+let examplesIndex = {};
+let examplesByKey = {};
+
+// Fetch and populate sample selector from JSON index
+async function initExamples() {
+    const response = await fetch("{{ url_for('static', filename='assembly/index.json') }}");
+    const data = await response.json();
+    examplesIndex = data;
+    
+    // Build lookup by ID
+    for (const example of data.examples) {
+        examplesByKey[example.id] = example;
+    }
+    
+    // Populate dropdown grouped by category
+    const select = document.getElementById('sampleSelect');
+    const categories = {};
+    
+    for (const example of data.examples) {
+        if (!categories[example.category]) {
+            categories[example.category] = [];
+        }
+        categories[example.category].push(example);
+    }
+    
+    for (const [category, examples] of Object.entries(categories)) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = category;
+        for (const example of examples) {
+            const option = document.createElement('option');
+            option.value = example.id;
+            option.textContent = example.title;
+            optgroup.appendChild(option);
+        }
+        select.appendChild(optgroup);
+    }
+    
+    // Load default example
+    const defaultKey = 'hello';
+    const code = await loadExampleCode(defaultKey);
+    editor.setValue(code);
+    document.getElementById('sampleSelect').value = defaultKey;
+}
+
+// Load example code from file
+async function loadExampleCode(id) {
+    const example = examplesByKey[id];
+    if (!example) return '';
+    const response = await fetch("{{ url_for('static', filename='assembly/') }}" + example.file);
+    return await response.text();
+}
+
+// Initialize emulator
+const emulator = new C64Emulator('screen', { audioEnabled: false });
+emulator.start();
+emulator.enableDragAndDrop();
+window.emulator = emulator;
+
+// Initialize assembler and debugger
+const assembler = new Assembler();
+const debugger_ = new C64Debugger(emulator.machine);
+debugger_.onStateChange = updateDebuggerUI;
+debugger_.onStep = onDebuggerStep;
+
+// Store the source map from assembly for line highlighting
+let currentSourceMap = null;
+
+// Initialize Assembly editor with integrated Run/Step/Stop buttons
+const editor = new CodeEditor('#asm-editor', {
+    language: 'asm',
+    fontSize: 13,
+    onRun: () => {
+        assembleAndRun();
+    },
+    onStep: () => {
+        debuggerStep();
+    },
+    onStop: () => {
+        debuggerStop();
+    }
+});
+
+// Initialize examples after editor is ready
+initExamples();
+window.editor = editor;
+
+// Load sample from dropdown
+async function loadSelectedSample() {
+    const select = document.getElementById('sampleSelect');
+    const id = select.value;
+    const example = examplesByKey[id];
+    if (example) {
+        const code = await loadExampleCode(id);
+        editor.setValue(code);
+        // Clear any existing debug state
+        editor.clearHighlight();
+        currentSourceMap = null;
+    }
+}
+window.loadSelectedSample = loadSelectedSample;
+
+// ============================================================================
+// Assembler and Debugger Controls
+// ============================================================================
+
+// Track debug state
+let isDebugMode = false;
+let initialSP = 0;  // Stack pointer when we started stepping (to detect RTS completion)
+
+// BASIC warm start address - where we return after user code finishes
+const BASIC_WARM_START = 0xA474;
+
+function assembleAndRun() {
+    const source = editor.getValue();
+    const result = assembler.assemble(source);
+    
+    if (!result.success) {
+        alert('Assembly errors:\n' + result.errors.map(e => `Line ${e.lineNum}: ${e.message}`).join('\n'));
+        return;
+    }
+    
+    // Store the source map for line highlighting
+    currentSourceMap = result.sourceMap;
+    
+    // Not debug mode - just run
+    isDebugMode = false;
+    editor.clearHighlight();
+    debugger_.codeBytes = null;
+    
+    // Make sure emulator is running
+    emulator.resume();
+    
+    // Load code into emulator RAM
+    emulator.machine.loadCode(result.bytes, result.startAddress);
+    
+    // Simulate JSR: push return address (BASIC warm start - 1) onto stack
+    // RTS will pop and add 1, returning to BASIC_WARM_START
+    const returnAddr = BASIC_WARM_START - 1;
+    const cpu = emulator.machine.cpu;
+    cpu.SP = (cpu.SP - 1) & 0xff;
+    emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = (returnAddr >> 8) & 0xff;  // high byte
+    cpu.SP = (cpu.SP - 1) & 0xff;
+    emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = returnAddr & 0xff;  // low byte
+    
+    // Set PC to start address - emulator will run at full speed
+    cpu.PC = result.startAddress;
+    
+    // Highlight Run button to show running state
+    updateButtonHighlight('run');
+    document.getElementById('sourceLine').textContent = '';
+    
+    console.log(`Running ${result.bytes.length} bytes at $${result.startAddress.toString(16).toUpperCase()}`);
+}
+window.assembleAndRun = assembleAndRun;
+
+function debuggerStep() {
+    const cpu = emulator.machine.cpu;
+    
+    // Check for crash (CPU halted)
+    if (cpu.halted) {
+        updateButtonHighlight(null);
+        document.getElementById('sourceLine').textContent = '*crash*';
+        return;
+    }
+    
+    // Enter debug mode - pause the emulator's main loop
+    isDebugMode = true;
+    emulator.pause();
+    
+    if (!debugger_.codeBytes) {
+        // Assemble first if not done yet
+        const source = editor.getValue();
+        const result = assembler.assemble(source);
+        
+        if (!result.success) {
+            alert('Assembly errors:\n' + result.errors.map(e => `Line ${e.lineNum}: ${e.message}`).join('\n'));
+            return;
+        }
+        
+        // Store the source map for line highlighting
+        currentSourceMap = result.sourceMap;
+        
+        // Load code into emulator RAM for stepping
+        emulator.machine.loadCode(result.bytes, result.startAddress);
+        
+        // Remember initial SP to detect when RTS completes
+        initialSP = cpu.SP;
+        
+        // Simulate JSR: push return address onto stack
+        const returnAddr = BASIC_WARM_START - 1;
+        cpu.SP = (cpu.SP - 1) & 0xff;
+        emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = (returnAddr >> 8) & 0xff;
+        cpu.SP = (cpu.SP - 1) & 0xff;
+        emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = returnAddr & 0xff;
+        
+        cpu.PC = result.startAddress;
+        
+        // Set up debugger tracking
+        debugger_.codeStart = result.startAddress;
+        debugger_.codeEnd = result.startAddress + result.bytes.length;
+        debugger_.codeBytes = result.bytes;
+        debugger_.state = DebuggerState.PAUSED;
+        
+        // Show initial state before first step
+        updateLineHighlight();
+        updateButtonHighlight('step');
+        return;
+    }
+    
+    // Check if current instruction is JSR (opcode 0x20)
+    const opcode = emulator.machine.ram[cpu.PC];
+    if (opcode === 0x20) {
+        // JSR - get target address (little-endian)
+        const targetAddr = emulator.machine.ram[cpu.PC + 1] | (emulator.machine.ram[cpu.PC + 2] << 8);
+        
+        // Check if target is within our code (step into) or external (step over)
+        if (targetAddr >= debugger_.codeStart && targetAddr < debugger_.codeEnd) {
+            // Step into - target is in user code, just execute the JSR
+            cpu.step();
+        } else {
+            // Step over - run until subroutine returns (SP returns to current level)
+            const preJsrSP = cpu.SP;
+            let maxCycles = 1000000;  // Safety limit
+            
+            do {
+                cpu.step();
+                maxCycles--;
+                
+                // Check for crash
+                if (cpu.halted) {
+                    updateButtonHighlight(null);
+                    document.getElementById('sourceLine').textContent = '*crash*';
+                    debugger_.state = DebuggerState.HALTED;
+                    return;
+                }
+                
+                // Check if main code finished (RTS back to BASIC)
+                if (cpu.SP === initialSP) {
+                    debuggerStop();
+                    return;
+                }
+            } while (cpu.SP !== preJsrSP && maxCycles > 0);
+            
+            if (maxCycles <= 0) {
+                updateButtonHighlight(null);
+                document.getElementById('sourceLine').textContent = '*timeout in subroutine*';
+                return;
+            }
+        }
+        
+        // Check for crash after stepping
+        if (cpu.halted) {
+            updateButtonHighlight(null);
+            document.getElementById('sourceLine').textContent = '*crash*';
+            debugger_.state = DebuggerState.HALTED;
+            return;
+        }
+        
+        // Check if RTS completed
+        if (cpu.SP === initialSP) {
+            debuggerStop();
+            return;
+        }
+    } else {
+        // Normal instruction - step one
+        cpu.step();
+        
+        // Check for crash after stepping
+        if (cpu.halted) {
+            updateButtonHighlight(null);
+            document.getElementById('sourceLine').textContent = '*crash*';
+            debugger_.state = DebuggerState.HALTED;
+            return;
+        }
+        
+        // Check if RTS completed (SP returned to initial level, meaning we popped our return address)
+        if (cpu.SP === initialSP) {
+            // Code finished - return to normal emulation
+            debuggerStop();
+            return;
+        }
+    }
+    
+    // Update the display
+    updateLineHighlight();
+    updateButtonHighlight('step');
+}
+window.debuggerStep = debuggerStep;
+
+function debuggerStop() {
+    // Exit debug mode and return to normal emulation
+    isDebugMode = false;
+    
+    // Resume the emulator's normal operation
+    emulator.resume();
+    
+    // Reset debugger state so next Step starts fresh
+    debugger_.codeBytes = null;
+    debugger_.state = DebuggerState.STOPPED;
+    initialSP = 0;
+    
+    editor.clearHighlight();
+    updateButtonHighlight(null);
+    document.getElementById('sourceLine').textContent = '';
+}
+window.debuggerStop = debuggerStop;
+
+// ============================================================================
+// Debugger UI Updates
+// ============================================================================
+
+//
+// Highlight Run or Step button to show current mode
+// @param {string|null} mode - 'run', 'step', or null to clear
+//
+function updateButtonHighlight(mode) {
+    const runBtn = document.querySelector('.run-btn');
+    const stepBtn = document.querySelector('.step-btn');
+    
+    if (runBtn) runBtn.classList.toggle('active', mode === 'run');
+    if (stepBtn) stepBtn.classList.toggle('active', mode === 'step');
+}
+
+function updateDebuggerUI(state, cpuState) {
+    document.getElementById('regPC').textContent = '$' + cpuState.PC.toString(16).padStart(4, '0').toUpperCase();
+    document.getElementById('regA').textContent = '$' + cpuState.A.toString(16).padStart(2, '0').toUpperCase();
+    document.getElementById('regX').textContent = '$' + cpuState.X.toString(16).padStart(2, '0').toUpperCase();
+    document.getElementById('regY').textContent = '$' + cpuState.Y.toString(16).padStart(2, '0').toUpperCase();
+    document.getElementById('regSP').textContent = '$' + cpuState.SP.toString(16).padStart(2, '0').toUpperCase();
+    
+    const flags = cpuState.flags;
+    document.getElementById('flagN').classList.toggle('set', flags.N);
+    document.getElementById('flagV').classList.toggle('set', flags.V);
+    document.getElementById('flagB').classList.toggle('set', flags.B);
+    document.getElementById('flagD').classList.toggle('set', flags.D);
+    document.getElementById('flagI').classList.toggle('set', flags.I);
+    document.getElementById('flagZ').classList.toggle('set', flags.Z);
+    document.getElementById('flagC').classList.toggle('set', flags.C);
+    
+    // Update button highlight based on state
+    if (state === DebuggerState.RUNNING) {
+        updateButtonHighlight('run');
+    } else if (state === DebuggerState.PAUSED) {
+        updateButtonHighlight('step');
+    } else {
+        updateButtonHighlight(null);
+    }
+    
+    // Update line highlight based on PC
+    updateLineHighlight();
+}
+
+function onDebuggerStep(entry) {
+    updateLineHighlight();
+}
+
+//
+// Find the source line number for the current PC address
+// Returns null if PC is not in the source map
+//
+function getSourceLineForPC(pc) {
+    if (!currentSourceMap || currentSourceMap.length === 0) {
+        return null;
+    }
+    
+    // Find the source map entry that matches this PC
+    for (const entry of currentSourceMap) {
+        if (entry.address === pc) {
+            return entry.lineNum;
+        }
+    }
+    
+    return null;
+}
+
+//
+// Update the editor line highlight and source line display
+//
+function updateLineHighlight() {
+    // Use emulator's actual CPU state (not debugger's internal CPU)
+    const pc = emulator.machine.cpu.PC;
+    const lineNum = getSourceLineForPC(pc);
+    
+    // Update editor highlight
+    if (lineNum !== null) {
+        editor.highlightLine(lineNum);
+    } else {
+        editor.clearHighlight();
+    }
+    
+    // Update source line display with disassembly of current PC instruction
+    const sourceLineElem = document.getElementById('sourceLine');
+    const instr = disassembleInstruction(emulator.machine.ram, pc);
+    const addr = '$' + pc.toString(16).padStart(4, '0').toUpperCase();
+    const bytes = instr.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+    sourceLineElem.textContent = `${addr}: ${bytes.padEnd(9)} ${instr.text}`;
+    
+    // Also update register display for real-time feedback
+    updateRegisterDisplay();
+}
+
+//
+// Update register display from emulator CPU
+//
+function updateRegisterDisplay() {
+    const cpu = emulator.machine.cpu;
+    document.getElementById('regPC').textContent = '$' + cpu.PC.toString(16).padStart(4, '0').toUpperCase();
+    document.getElementById('regA').textContent = '$' + cpu.A.toString(16).padStart(2, '0').toUpperCase();
+    document.getElementById('regX').textContent = '$' + cpu.X.toString(16).padStart(2, '0').toUpperCase();
+    document.getElementById('regY').textContent = '$' + cpu.Y.toString(16).padStart(2, '0').toUpperCase();
+    document.getElementById('regSP').textContent = '$' + cpu.SP.toString(16).padStart(2, '0').toUpperCase();
+    
+    // Extract flags from CPU's P register using bitmasks
+    const p = cpu.P;
+    document.getElementById('flagN').classList.toggle('set', !!(p & FLAG_N));
+    document.getElementById('flagV').classList.toggle('set', !!(p & FLAG_V));
+    document.getElementById('flagB').classList.toggle('set', !!(p & FLAG_B));
+    document.getElementById('flagD').classList.toggle('set', !!(p & FLAG_D));
+    document.getElementById('flagI').classList.toggle('set', !!(p & FLAG_I));
+    document.getElementById('flagZ').classList.toggle('set', !!(p & FLAG_Z));
+    document.getElementById('flagC').classList.toggle('set', !!(p & FLAG_C));
+}
+
+// ============================================================================
+// Audio Controls
+// ============================================================================
+
+let isMuted = true;
+
+function toggleMute() {
+    isMuted = !isMuted;
+    const btn = document.getElementById('muteBtn');
+    if (isMuted) {
+        btn.textContent = '🔇 MUTED';
+        btn.classList.add('muted');
+        emulator.disableAudio();
+    } else {
+        btn.textContent = '🔊 SOUND';
+        btn.classList.remove('muted');
+        emulator.enableAudio();
+    }
+}
+window.toggleMute = toggleMute;
+
+// ============================================================================
+// Keyboard handling
+// ============================================================================
+
+document.addEventListener('keydown', e => {
+    // Don't capture keys when typing in the editor
+    if (e.target.classList.contains('editor-textarea')) {
+        return;
+    }
+    emulator.handleKeyPress(e);
+});
+
+document.addEventListener('keyup', e => {
+    if (e.target.classList.contains('editor-textarea')) {
+        return;
+    }
+    emulator.handleKeyRelease(e);
+});
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+window.addEventListener('load', () => {
+    document.body.tabIndex = 0;
+    document.body.focus();
+    
+    // Initialize register display
+    updateDebuggerUI(DebuggerState.STOPPED, debugger_.getState());
+    
+    // Real-time register updates (poll every 100ms)
+    setInterval(() => {
+        // Update registers from the actual emulator CPU (not debugger)
+        const cpu = emulator.machine.cpu;
+        const cpuState = {
+            A: cpu.A,
+            X: cpu.X,
+            Y: cpu.Y,
+            SP: cpu.SP,
+            PC: cpu.PC,
+            flags: {
+                N: !!(cpu.P & 0x80),
+                V: !!(cpu.P & 0x40),
+                B: !!(cpu.P & 0x10),
+                D: !!(cpu.P & 0x08),
+                I: !!(cpu.P & 0x04),
+                Z: !!(cpu.P & 0x02),
+                C: !!(cpu.P & 0x01)
+            }
+        };
+        
+        // Update register display
+        document.getElementById('regPC').textContent = '$' + cpuState.PC.toString(16).padStart(4, '0').toUpperCase();
+        document.getElementById('regA').textContent = '$' + cpuState.A.toString(16).padStart(2, '0').toUpperCase();
+        document.getElementById('regX').textContent = '$' + cpuState.X.toString(16).padStart(2, '0').toUpperCase();
+        document.getElementById('regY').textContent = '$' + cpuState.Y.toString(16).padStart(2, '0').toUpperCase();
+        document.getElementById('regSP').textContent = '$' + cpuState.SP.toString(16).padStart(2, '0').toUpperCase();
+        
+        // Update flags
+        document.getElementById('flagN').classList.toggle('set', cpuState.flags.N);
+        document.getElementById('flagV').classList.toggle('set', cpuState.flags.V);
+        document.getElementById('flagB').classList.toggle('set', cpuState.flags.B);
+        document.getElementById('flagD').classList.toggle('set', cpuState.flags.D);
+        document.getElementById('flagI').classList.toggle('set', cpuState.flags.I);
+        document.getElementById('flagZ').classList.toggle('set', cpuState.flags.Z);
+        document.getElementById('flagC').classList.toggle('set', cpuState.flags.C);
+        
+        // Update instruction display
+        const instr = disassembleInstruction(emulator.machine.ram, cpuState.PC);
+        const addr = '$' + cpuState.PC.toString(16).padStart(4, '0').toUpperCase();
+        const bytes = instr.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+        document.getElementById('sourceLine').textContent = `${addr}: ${bytes.padEnd(9)} ${instr.text}`;
+        
+        // In debug mode, also update the editor line highlight
+        if (isDebugMode && currentSourceMap) {
+            const lineNum = getSourceLineForPC(cpuState.PC);
+            if (lineNum !== null) {
+                editor.highlightLine(lineNum);
+            }
+        }
+    }, 100);
+});
+</script>
+{% endblock %}
