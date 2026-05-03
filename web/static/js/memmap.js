@@ -31,6 +31,9 @@ let memoryEntries = [];
 async function loadMemoryData() {
     try {
         const response = await fetch('/static/js/memmap-data.json');
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        }
         const data = await response.json();
         memoryEntries = data.entries || [];
         console.log(`Loaded ${memoryEntries.length} memory entries`);
@@ -99,7 +102,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const bit = btn.dataset.bit;
                 state[bit] = !state[bit];
                 btn.classList.toggle('active', state[bit]);
-                btn.querySelector(':not(.bit-name)').textContent = state[bit] ? '1' : '0';
+                const valueEl = btn.querySelector(':not(.bit-name)');
+                if (valueEl) {
+                    valueEl.textContent = state[bit] ? '1' : '0';
+                }
                 clearActivePreset();
                 updateMemoryMap();
             });
@@ -743,13 +749,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.addEventListener('keydown', (e) => {
         if (e.key === '1') {
             const btn = document.querySelector('[data-bit="loram"]');
-            btn.click();
+            if (btn) btn.click();
         } else if (e.key === '2') {
             const btn = document.querySelector('[data-bit="hiram"]');
-            btn.click();
+            if (btn) btn.click();
         } else if (e.key === '3') {
             const btn = document.querySelector('[data-bit="charen"]');
-            btn.click();
+            if (btn) btn.click();
         } else if (e.key === 'Escape') {
             document.querySelectorAll('.memory-region').forEach(r => r.style.outline = 'none');
             resetEntryDetails();
@@ -804,7 +810,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const bitLabel = bit.bit_end
                     ? `Bits ${bit.bit}-${bit.bit_end}`
                     : `Bit ${bit.bit}`;
-                li.innerHTML = `<span class="label">${bitLabel}:</span> ${bit.description}`;
+                // Use textContent to avoid HTML injection from JSON data.
+                const labelSpan = document.createElement('span');
+                labelSpan.className = 'label';
+                labelSpan.textContent = `${bitLabel}:`;
+                li.appendChild(labelSpan);
+                li.appendChild(document.createTextNode(' ' + (bit.description || '')));
                 bitsEl.appendChild(li);
             });
         } else {

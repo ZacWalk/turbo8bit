@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}Memory Map - Turbo8bit{% endblock %}
+{% block description %}Explore the Commodore 64 memory map. See how 64KB of RAM, BASIC and KERNAL ROMs, VIC-II, SID, and CIA registers are banked into the 6510's address space.{% endblock %}
 
 {% block content %}
 <!-- Workspace: Two-panel layout -->
@@ -118,31 +119,11 @@
                     </div>
                 </div>
                 
-                <!-- Region Details moved here -->
-                <div class="region-details-panel">
-                    <h3>REGION DETAILS</h3>
-                    <div class="region-info active" id="info-entry-details">
-                        <h4 id="entry-name">Memory Map</h4>
-                        <div class="range" id="entry-address">Hover over cells for details</div>
-                        <p id="entry-description">The cells on the right of each memory region show documented memory locations from "Mapping the Commodore 64".</p>
-                        <p id="entry-title" style="color: var(--c64-yellow); display: none;"></p>
-                        <div class="details" id="entry-bits-container" style="display: none;">
-                            <h4>Bit Fields</h4>
-                            <ul id="entry-bits"></ul>
-                        </div>
-                        <div class="current-config">
-                            <h4>Current Configuration</h4>
-                            <div class="config-value" id="config-summary">
-                                BASIC + KERNAL + I/O visible
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
-    
-    <!-- Right Panel: Memory Map Display -->
+
+    <!-- Middle Panel: Memory Map Display -->
     <div class="workspace-secondary">
         <div class="panel-content memmap-table-panel">
             <div class="panel-header">
@@ -162,6 +143,36 @@
                         <!-- Dynamically generated 4KB grid rows -->
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Panel: Region Details -->
+    <div class="workspace-tertiary">
+        <div class="panel-content">
+            <div class="panel-header">
+                <h2>REGION DETAILS</h2>
+                <p class="panel-subtitle">Hover over memory cells to see details here.</p>
+            </div>
+            <div class="panel-body region-details-body">
+                <div class="region-details-panel">
+                    <div class="region-info active" id="info-entry-details">
+                        <h4 id="entry-name">Memory Map</h4>
+                        <div class="range" id="entry-address">Hover over cells for details</div>
+                        <p id="entry-description">The cells on the right of each memory region show documented memory locations from "Mapping the Commodore 64".</p>
+                        <p id="entry-title" style="color: var(--c64-yellow); display: none;"></p>
+                        <div class="details" id="entry-bits-container" style="display: none;">
+                            <h4>Bit Fields</h4>
+                            <ul id="entry-bits"></ul>
+                        </div>
+                        <div class="current-config">
+                            <h4>Current Configuration</h4>
+                            <div class="config-value" id="config-summary">
+                                BASIC + KERNAL + I/O visible
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

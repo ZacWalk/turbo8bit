@@ -28,7 +28,7 @@
     --c64-cyan: #6ABFC6;
     --c64-purple: #A057A3;
     --c64-green: #5CAB5E;
-    --c64-blue: #40318D;
+    --c64-blue: #31318D;
     --c64-yellow: #C9D487;
     --c64-orange: #A1683C;
     --c64-brown: #6D5412;
@@ -36,9 +36,17 @@
     --c64-dark-grey: #626262;
     --c64-grey: #898989;
     --c64-light-green: #9AE29B;
-    --c64-light-blue: #887ECB;
+    --c64-light-blue: #7e7ECB;
     --c64-light-grey: #ADADAD;
     
+    /* Brand background derived from favicon.png pixel (0,0) */
+    --brand-bg: #056597;
+    --main-bg: #222277;
+    --footer-bg: #056597;
+    /* Dark text used on the lighter brand/footer backgrounds for contrast */
+    --brand-text: #0A2540;
+    --brand-text-muted: #1A3A55;
+
     /* Theme variables - classic C64 boot screen colors */
     --bg-primary: var(--c64-blue);
     --bg-secondary: var(--c64-dark-grey);
@@ -62,7 +70,7 @@ html {
 
 body {
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-    background-color: var(--bg-primary);
+    background-color: var(--main-bg);
     color: var(--text-primary);
     min-height: 100vh;
     font-size: 1rem;
@@ -70,9 +78,8 @@ body {
 }
 
 /* Header */
-.site-header {
-    background-color: var(--c64-black);
-    border-bottom: 4px solid var(--c64-light-blue);
+.site-header {    
+    background-color: var(--brand-bg);
     padding: 0rem 2rem;
     display: flex;
     align-items: center;
@@ -81,7 +88,36 @@ body {
     z-index: 100;
 }
 
-/* C64 Silver Label Badge */
+/* Site brand (logo + wordmark) */
+.site-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 100px;
+    padding: 4px 8px;
+    text-decoration: none;
+    user-select: none;
+}
+
+.site-brand-logo {
+    height: 100%;
+    width: auto;
+    display: block;
+}
+
+.site-brand-text {
+    font-family: 'Michroma', sans-serif;
+    font-size: 1.375rem;
+    color: var(--c64-white);
+    letter-spacing: 1px;
+    line-height: 1;
+}
+
+.site-brand:hover .site-brand-text {
+    color: var(--c64-yellow);
+}
+
+/* C64 Silver Label Badge (legacy) */
 .c64-badge {
     /* Dimensions - scaled for header */
     height: 44px;
@@ -173,7 +209,8 @@ body {
 }
 
 .main-nav a {
-    color: var(--c64-yellow);
+    color: var(--c64-white);
+    font-size: 1.1rem;
     text-decoration: none;
     padding: 0.5rem 1rem;
     border: 2px solid transparent;
@@ -181,7 +218,7 @@ body {
 }
 
 .main-nav a:hover {
-    border-color: var(--c64-yellow);
+    border-color: var(--c64-white);
 }
 
 /* User Authentication */
@@ -192,7 +229,7 @@ body {
 }
 
 .user-auth .user-name {
-    color: var(--c64-light-blue);
+    color: var(--brand-text);
     font-size: 0.75rem;
 }
 
@@ -214,26 +251,25 @@ body {
 
 /* Footer */
 .site-footer {
-    background-color: var(--c64-black);
-    border-top: 4px solid var(--c64-light-blue);
+    background-color: var(--footer-bg);
     padding: 2rem 2rem 1.5rem;
     text-align: center;
 }
 
 .site-footer .ready-prompt {
-    color: var(--c64-light-blue);
+    color: var(--brand-text);
     font-size: 1rem;
     margin-bottom: 1rem;
 }
 
 .site-footer .footer-text {
-    color: var(--c64-grey);
+    color: var(--brand-text-muted);
     font-size: 0.875rem;
     margin-bottom: 0.5rem;
 }
 
 .site-footer .footer-tagline {
-    color: var(--c64-light-blue);
+    color: var(--brand-text);
     font-size: 0.8125rem;
 }
 
@@ -2771,14 +2807,44 @@ body {
    MEMORY MAP PAGE
    ====================================== */
 
-/* Memmap workspace adjustments */
+/* Memmap workspace adjustments: 25% / 50% / 25% (flex ratios share gap correctly) */
 .memmap-workspace .workspace-primary {
-    flex: 0 0 350px;
-    max-width: 350px;
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .memmap-workspace .workspace-secondary {
-    flex: 1;
+    flex: 2 1 0;
+    min-width: 0;
+}
+
+.memmap-workspace .workspace-tertiary {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.region-details-body {
+    overflow-y: auto;
+}
+
+/* Stack title and subtitle vertically in the region details header */
+.memmap-workspace .workspace-tertiary .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+@media (max-width: 1024px) {
+    .memmap-workspace {
+        flex-wrap: wrap;
+    }
+    .memmap-workspace .workspace-primary,
+    .memmap-workspace .workspace-secondary,
+    .memmap-workspace .workspace-tertiary {
+        flex: 1 1 100%;
+    }
 }
 
 .banking-controls-body {
@@ -2793,11 +2859,9 @@ body {
     overflow-y: auto;
 }
 
-/* Region details panel in left column */
+/* Region details panel */
 .region-details-panel {
-    margin-top: 20px;
-    padding-top: 15px;
-    border-top: 2px solid var(--c64-light-blue);
+    /* Now lives in its own workspace-tertiary panel */
 }
 
 .region-details-panel h3 {
@@ -3957,14 +4021,11 @@ body {
 }
 
 .about-page .page-header p {
-    color: var(--c64-light-grey);
+    color: var(--brand-text-muted);
     font-size: 1.1rem;
 }
 
 .about-content {
-    background: rgba(0, 0, 0, 0.3);
-    border: 2px solid var(--c64-dark-grey);
-    border-radius: 4px;
     padding: 2rem;
 }
 
@@ -3984,13 +4045,52 @@ body {
 }
 
 .about-section p {
-    color: var(--c64-light-grey);
+    color: var(--c64-white);
     line-height: 1.8;
     margin-bottom: 1rem;
 }
 
 .about-section p:last-child {
     margin-bottom: 0;
+}
+
+.about-section a {
+    color: var(--c64-cyan);
+    text-decoration: underline;
+}
+
+.about-section a:hover {
+    color: var(--c64-light-green);
+}
+
+.story-intro {
+    display: flex;
+    gap: 2rem;
+    align-items: flex-start;
+}
+
+.story-intro .story-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.about-logo {
+    flex: 0 0 auto;
+    width: 256px;
+    height: 256px;
+    padding: 8px;
+}
+
+@media (max-width: 700px) {
+    .story-intro {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+    .about-logo {
+        width: 192px;
+        height: 192px;
+    }
 }
 
 .mission-points {
@@ -4012,17 +4112,16 @@ body {
 }
 
 .mission-item h3 {
-    color: var(--c64-cyan);
+    color: var(--brand-text);
     margin-bottom: 0.5rem;
 }
 
 .mission-item p {
-    color: var(--c64-light-grey);
+    color: var(--brand-text-muted);
     margin: 0;
 }
 
 .author-section .author-card {
-    background: rgba(0, 0, 0, 0.3);
     padding: 1.5rem;
     border-radius: 4px;
 }
@@ -4059,7 +4158,7 @@ body {
 }
 
 .tech-list li {
-    color: var(--c64-light-grey);
+    color: var(--brand-text);
     padding: 0.5rem 0;
     padding-left: 1.5rem;
     position: relative;
@@ -4077,7 +4176,7 @@ body {
 }
 
 .ready-message {
-    color: var(--c64-light-blue);
+    color: var(--brand-text);
     font-size: 1.25rem;
     margin-top: 1.5rem;
 }

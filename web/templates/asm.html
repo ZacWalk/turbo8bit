@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}6502 Assembly - Turbo8bit{% endblock %}
+{% block description %}Write and run 6502/6510 assembly code in the browser. Learn C64 machine programming with an interactive assembler, debugger, and live register view.{% endblock %}
 
 {% block content %}
 <div class="c64-page">
@@ -184,6 +185,10 @@ let examplesByKey = {};
 // Fetch and populate sample selector from JSON index
 async function initExamples() {
     const response = await fetch("{{ url_for('static', filename='assembly/index.json') }}");
+    if (!response.ok) {
+        console.error(`Failed to load assembly examples index: HTTP ${response.status}`);
+        return;
+    }
     const data = await response.json();
     examplesIndex = data;
     
@@ -227,6 +232,10 @@ async function loadExampleCode(id) {
     const example = examplesByKey[id];
     if (!example) return '';
     const response = await fetch("{{ url_for('static', filename='assembly/') }}" + example.file);
+    if (!response.ok) {
+        console.error(`Failed to load assembly example '${id}': HTTP ${response.status}`);
+        return '';
+    }
     return await response.text();
 }
 

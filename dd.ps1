@@ -9,14 +9,19 @@
 
 param(
     [Parameter(Position=0)]
-    [ValidateSet("deploy", "run", "test", "gen", "format", "help", "demo", "crt")]
+    [ValidateSet("deploy", "run", "test", "gen", "format", "help", "crt")]
     [string]$Command = "help",
-    
+
     # Deploy options
-    [string]$Project = "turbo8bit",
     [switch]$NoPromote,
     [string]$Version = ""
 )
+
+# Hard-pinned: this repo is the turbo8bit project. Never deploy
+# anywhere else, even if `gcloud config set project ...` points at
+# another project on this machine. Intentionally not exposed as a
+# parameter so a stray `-Project foo` cannot ship to the wrong project.
+$TARGET_PROJECT = "turbo8bit"
 
 $ErrorActionPreference = "Stop"
 $ScriptRoot = $PSScriptRoot
@@ -33,14 +38,13 @@ function Show-Help {
     Write-Host "  run            - Run the local development server"
     Write-Host "  test           - Run all tests using pytest"
     Write-Host "  gen            - Generate cover sheets and update related scripts"
-    Write-Host "  demo           - Build and run the Walker demo"
     Write-Host "  crt            - Deploy CRT files to Cloud Storage"
     Write-Host "  format         - Format Python files with Black"
     Write-Host "  format --check - Check formatting without changes"
     Write-Host "  help           - Show this help message"
     Write-Host ""
     Write-Host "Deploy Options:" -ForegroundColor Green
-    Write-Host "  -Project <name>   - GCP project ID (default: turbo8bit)"
+    Write-Host "  (deploy target is hard-pinned to project '$TARGET_PROJECT')"
     Write-Host "  -NoPromote        - Don't promote the new version"
     Write-Host "  -Version <ver>    - Specific version name"
     Write-Host ""
@@ -48,9 +52,8 @@ function Show-Help {
     Write-Host "  .\dd.ps1 run"
     Write-Host "  .\dd.ps1 test"
     Write-Host "  .\dd.ps1 deploy"
-    Write-Host "  .\dd.ps1 deploy -Project myproject -Version v2"
+    Write-Host "  .\dd.ps1 deploy -Version v2"
     Write-Host "  .\dd.ps1 gen"
-    Write-Host "  .\dd.ps1 demo"
     Write-Host ""
 }
 
@@ -116,18 +119,35 @@ function Invoke-Deploy {
             exit 1
         }
 
-        Write-Host "Project: $Project" -ForegroundColor Yellow
+        # Verify the target project actually exists and is accessible to the
+        # active gcloud account. Without this check, `gcloud app deploy
+        # --project=...` will fail with a confusing error and the operator
+        # may not notice the deploy never happened.
+        $describe = gcloud projects describe $TARGET_PROJECT --format="value(projectId)" 2>&1
+        if ($LASTEXITCODE -ne 0 -or $describe -ne $TARGET_PROJECT) {
+            Write-Host "[FAIL] Target project '$TARGET_PROJECT' is not accessible to the active gcloud account." -ForegroundColor Red
+            Write-Host "       gcloud said: $describe" -ForegroundColor DarkGray
+            Write-Host "       Run 'gcloud auth login' and ensure you have access to the $TARGET_PROJECT project." -ForegroundColor Yellow
+            exit 1
+        }
+
+        $current = (gcloud config get-value project 2>$null).Trim()
+        if ($current -ne $TARGET_PROJECT) {
+            Write-Host "Note: gcloud active project is '$current'; this deploy will use '--project=$TARGET_PROJECT' regardless." -ForegroundColor Yellow
+        }
+
+        Write-Host "Project: $TARGET_PROJECT" -ForegroundColor Yellow
         Write-Host "Directory: $webDir" -ForegroundColor Yellow
         Write-Host ""
 
         # Build deploy command
-        $deployArgs = @("app", "deploy", "app.yaml", "--project", $Project, "--quiet")
-        
+        $deployArgs = @("app", "deploy", "app.yaml", "--project", $TARGET_PROJECT, "--quiet")
+
         if ($Version) {
             $deployArgs += "--version"
             $deployArgs += $Version
         }
-        
+
         if ($NoPromote) {
             $deployArgs += "--no-promote"
         }
@@ -143,7 +163,7 @@ function Invoke-Deploy {
             Write-Host "  Deployment successful!" -ForegroundColor Green
             Write-Host "========================================" -ForegroundColor Green
             Write-Host ""
-            Write-Host "View at: https://$Project.appspot.com" -ForegroundColor Cyan
+            Write-Host "View at: https://$TARGET_PROJECT.appspot.com" -ForegroundColor Cyan
         } else {
             Write-Host ""
             Write-Host "Deployment failed with exit code: $LASTEXITCODE" -ForegroundColor Red
@@ -196,29 +216,6 @@ function Invoke-Run {
     Start-Job -ScriptBlock { Start-Sleep -Seconds 2; Start-Process $using:OpenUrl } | Out-Null
 
     python (Join-Path $ScriptRoot "web\main.py")
-}
-
-function Invoke-Demo {
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  Building Walker Demo" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-
-    $VenvPython = Get-VenvPython
-    $buildScript = Join-Path $ScriptRoot "demo\build.py"
-    
-    Write-Host "Running build.py..." -ForegroundColor Yellow
-    & $VenvPython $buildScript
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Build failed!" -ForegroundColor Red
-        exit $LASTEXITCODE
-    }
-    
-    Write-Host "Demo built successfully." -ForegroundColor Green
-    Write-Host "Starting server..." -ForegroundColor Green
-    
-    Invoke-Run -OpenUrl "http://localhost:8082/demo"
 }
 
 function Invoke-Gen {
@@ -274,8 +271,7 @@ function Invoke-Test {
     
     $testsDir = Join-Path $ScriptRoot "tests"
     
-    Wdemo"   { Invoke-Demo }
-    "rite-Host "Running tests from: $testsDir" -ForegroundColor Yellow
+    Write-Host "Running tests from: $testsDir" -ForegroundColor Yellow
     Write-Host ""
     
     & $VenvPython -m pytest $testsDir -v
@@ -321,7 +317,7 @@ function Invoke-Crt {
     & gcloud storage buckets describe $bucket 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Creating bucket $bucket..." -ForegroundColor Yellow
-        & gcloud storage buckets create $bucket --project=$Project --location=US --uniform-bucket-level-access
+        & gcloud storage buckets create $bucket --project=$TARGET_PROJECT --location=US --uniform-bucket-level-access
         
         # Set CORS for browser access
         Write-Host "Setting CORS policy..." -ForegroundColor Gray
@@ -374,7 +370,6 @@ switch ($Command) {
     "run"    { Invoke-Run }
     "test"   { Invoke-Test }
     "gen"    { Invoke-Gen }
-    "demo"   { Invoke-Demo }
     "crt"    { Invoke-Crt }
     "format" { Invoke-Format }
     "help"   { Show-Help }

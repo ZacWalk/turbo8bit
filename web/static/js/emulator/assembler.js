@@ -200,6 +200,10 @@ export class Assembler {
         this.warnings = [];
         this.output = [];
         this.sourceMap = [];
+        // Pass-1 mode cache: lineNum -> addressing mode. Pass-2 reuses these so
+        // a forward-referenced label that turns out to be zero-page can't shrink
+        // an instruction pass-1 sized as absolute (which would mis-align addresses).
+        this.lineModes = new Map();
 
         // Parse into lines
         const lines = source.split('\n').map((line, index) => ({
@@ -269,6 +273,7 @@ export class Assembler {
 
                 // Handle instruction
                 if (parsed.mnemonic) {
+                    this.lineModes.set(line.lineNum, parsed.mode);
                     const size = this.getInstructionSize(parsed);
                     this.currentAddress += size;
                 }
@@ -311,6 +316,10 @@ export class Assembler {
                     if (startAddress === null) {
                         startAddress = this.currentAddress;
                         this.outputNextAddress = this.currentAddress;
+                    }
+                    // Force the same addressing mode chosen in pass 1 so byte counts match.
+                    if (this.lineModes.has(line.lineNum)) {
+                        parsed.mode = this.lineModes.get(line.lineNum);
                     }
                     this.emitInstruction(parsed, line.lineNum);
                 }

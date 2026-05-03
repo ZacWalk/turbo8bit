@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}About - Turbo8bit{% endblock %}
+{% block description %}About Turbo8bit - a love letter to the Commodore 64, built to teach BASIC, 6502 assembly, and the hardware that made the C64 the best-selling computer of all time.{% endblock %}
 
 {% block content %}
 <div class="about-page">
@@ -9,9 +10,16 @@
     <div class="about-content">
         <div class="about-section">
             <h2>THE STORY</h2>
-            <p>Turbo8bit is a tribute to the Commodore 64—the best-selling home computer of all time. This website is dedicated to exploring, understanding, and celebrating this remarkable machine that shaped a generation of programmers and gamers.</p>
-            
-            <p>Here you'll find interactive explorations of the C64's hardware, from the legendary SID sound chip to the VIC-II graphics processor. Dive into memory maps, experiment with the emulator, and browse classic programming books that taught millions how to code.</p>
+            <div class="story-intro">
+                <img class="about-logo" src="{{ url_for('static', filename='icons/favicon-512.png') }}" alt="Turbo8bit logo" width="256" height="256">
+                <div class="story-text">
+                    <p>Turbo8bit is a tribute to the Commodore 64—the best-selling home computer of all time. This website is dedicated to exploring, understanding, and celebrating this remarkable machine that shaped a generation of programmers and gamers.</p>
+
+                    <p>Here you'll find interactive explorations of the C64's hardware, from the legendary SID sound chip to the VIC-II graphics processor. Dive into memory maps, experiment with the emulator, and browse classic programming books that taught millions how to code.</p>
+
+                    <p>This page is still a work in progress and experimental. Slowly getting there. <a href="https://github.com/ZacWalk/turbo8bit/issues" target="_blank" rel="noopener">Report bugs here.</a></p>
+                </div>
+            </div>
         </div>
         
 
@@ -20,9 +28,7 @@
             <h2>THE AUTHOR</h2>
             <div class="author-card">
                 <div class="author-info">
-                    <p>This site was created by <strong>Zac Walker</strong>, a software developer who grew up with a Commodore 64. Like many children of the 1980s, the C64 was his first computer—a gateway to programming, games, and a lifelong love of technology.</p>
-                    
-     
+                    <p>This site was created by me, <strong><a href="https://rethinkify.com/">Zac Walker</a></strong>. I have worked in technology for three decades, and the Commodore 64 is where it all started. Like many children of the 1980s, the C64 was my first computer — a gateway to programming, games, and a lifelong love of technology.</p>
                 </div>
             </div>
         </div>

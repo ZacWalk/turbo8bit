@@ -3,12 +3,58 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Turbo8bit{% endblock %}</title>
-    <meta name="description" content="Learn about the Commodore 64 by coding in BASIC and 6502 assembler.">
+    {% set canonical_url = CANONICAL_ORIGIN + request.path %}
+    {% set og_image = canonical_static_url('icons/og-image.png') %}
+    <title>{% block title %}Turbo8bit - Learn the Commodore 64{% endblock %}</title>
+    <meta name="description" content="{% block description %}Learn about the Commodore 64 by coding in BASIC and 6502 assembler. Interactive emulator, hardware diagrams, memory map, and SID chip player.{% endblock %}">
+    {% set page_title = self.title() %}
+    {% set page_description = self.description() %}
+    <meta name="theme-color" content="#056597">
+
+    <!-- Favicons (generated from favicon.png by tools/gen_favicons.py) -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='icons/favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='icons/favicon-16.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='icons/favicon-32.png') }}">
+    <link rel="icon" type="image/png" sizes="48x48" href="{{ url_for('static', filename='icons/favicon-48.png') }}">
+    <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/favicon-192.png') }}">
+    <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='icons/favicon-512.png') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='icons/favicon-180.png') }}">
+    <meta name="author" content="Turbo8bit">
+    <meta name="keywords" content="Commodore 64, C64, 6502, 6510, BASIC, assembly, SID, VIC-II, retro computing, emulator, 8-bit">
+    <link rel="canonical" href="{{ canonical_url }}">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Turbo8bit">
+    <meta property="og:title" content="{{ page_title }}">
+    <meta property="og:description" content="{{ page_description }}">
+    <meta property="og:url" content="{{ canonical_url }}">
+    <meta property="og:image" content="{{ og_image }}">
+    <meta property="og:locale" content="en_US">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ page_title }}">
+    <meta name="twitter:description" content="{{ page_description }}">
+    <meta name="twitter:image" content="{{ og_image }}">
+
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Press+Start+2P&display=swap" rel="stylesheet">
+
+    <!-- Structured data: WebSite -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Turbo8bit",
+        "url": "{{ canonical_url_for('index') }}",
+        "description": "Learn about the Commodore 64 by coding in BASIC and 6502 assembler.",
+        "inLanguage": "en"
+    }
+    </script>
+
     {% if google_client_id %}
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     {% endif %}
@@ -16,17 +62,9 @@
 </head>
 <body>
     <header class="site-header">
-        <a href="/" class="c64-badge">
-            <span class="c64-text-logo">TURBO</span>
-            <span class="c64-stripes">
-                <span class="stripe red"></span>
-                <span class="stripe orange"></span>
-                <span class="stripe yellow"></span>
-                <span class="stripe green"></span>
-                <span class="stripe blue"></span>
-                <span class="stripe violet"></span>
-            </span>
-            <span class="c64-model-number">8bit</span>
+        <a href="/" class="site-brand">
+            <img class="site-brand-logo" src="{{ url_for('static', filename='favicon.png') }}" alt="Turbo8bit logo">
+            <span class="site-brand-text">Turbo8bit</span>
         </a>
         <nav class="main-nav">
             <a href="/">BASIC</a>
@@ -34,7 +72,6 @@
             <a href="/hardware">Hardware</a>
             <a href="/memmap">Memory</a>
             <a href="/sid">SID</a>
-            {% if user.is_admin %}<a href="/demo">Demo</a>{% endif %}
             <a href="/about">About</a>
         </nav>
         <div class="user-auth">

@@ -3,6 +3,10 @@
 Turbo8bit - learn about the Commodore 64 by coding in BASIC and 6502 assembler. 
 JavaScript C64 emulator that takes you back to 1982.
 
+Live at [Turbo8bit.com](https://Turbo8bit.com).
+
+![turbo8bit.com](screenshot.png)
+
 ## Features
 
 - **C64 History Timeline**: Key milestones from the C64's development through its legacy
@@ -11,21 +15,6 @@ JavaScript C64 emulator that takes you back to 1982.
 - **Memory Map Explorer**: Browse the complete C64 memory layout
 - **SID Music Player**: Play classic SID tunes with an accurate emulator
 - **PDF Library**: Collection of C64 programming books and references
-
-## Project Structure
-
-```
-├── dd.ps1              # CLI tool: run, deploy, test, gen, format
-├── web/                # Flask application
-│   ├── main.py         # Routes and Flask app
-│   ├── app.yaml        # GAE configuration
-│   ├── templates/      # Jinja2 templates
-│   └── static/         # CSS, JS, SID files, PDFs
-│       └── js/emulator/ # C64 & SID emulator (ES6 modules)
-├── tools/              # CLI utilities for data and assets
-├── tests/              # Test suite (pytest + py_mini_racer)
-└── raw-images/         # Source images for sprite generation
-```
 
 ## Emulator Architecture
 
@@ -60,59 +49,6 @@ C64Machine (Bus interface)
 | `editor.js` | Syntax-highlighted code editor for BASIC and Assembly |
 | `sidplayer.js` | PSID/RSID file player |
 | `roms.js` | BASIC and KERNAL ROM data |
-
-## Development
-
-### Prerequisites
-
-- Python 3.10+
-- Google Cloud SDK (optional, for deployment)
-
-### Setup
-
-1. Create and activate a virtual environment:
-   ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -r web/requirements.txt
-   pip install pytest py_mini_racer
-   ```
-
-### CLI Commands
-
-Use the `dd.ps1` CLI tool:
-
-```powershell
-.\dd.ps1 run      # Start local dev server at http://localhost:8082
-.\dd.ps1 test     # Run all tests using pytest
-.\dd.ps1 deploy   # Deploy to Google App Engine
-.\dd.ps1 gen      # Generate cover sprites from raw-images/
-.\dd.ps1 format   # Format Python files with Black
-.\dd.ps1 help     # Show all commands
-```
-
-### Testing
-
-Tests use **py_mini_racer** to run JavaScript code in Python, enabling comprehensive testing of:
-
-- **C64 Emulator**: Startup, READY prompt, BASIC program execution
-- **SID Player**: File parsing, player initialization, audio generation  
-- **CPU Emulation**: Instruction execution, memory operations
-- **SID Chip**: Waveforms, envelopes, filters
-
-```powershell
-.\dd.ps1 test
-```
-
-## Routes
-
-- `/` - C64 timeline homepage
-- `/c64` - Interactive C64 emulator
-- `/hardware` - Hardware block diagram
-- `/memmap` - Memory map explorer
-- `/sid` - SID chip info and music player
-- `/library` - PDF book library
-- `/about` - About page
 
 ## SID Emulator
 

@@ -156,6 +156,12 @@ export class C64Emulator {
             };
 
             this.audioProcessor.connect(this.audioContext.destination);
+            // Modern browsers start the AudioContext in 'suspended' state until
+            // explicitly resumed; enableAudio() is invoked from a user gesture
+            // so this is allowed.
+            if (this.audioContext.state === 'suspended') {
+                try { await this.audioContext.resume(); } catch (e) { /* ignore */ }
+            }
             console.log('Audio initialized at', this.sampleRate, 'Hz');
         } catch (e) {
             console.warn('Failed to initialize audio:', e);
@@ -541,10 +547,11 @@ if (typeof window !== 'undefined') {
             try {
                 const snap = window.c64Emu.snapshot();
                 sessionStorage.setItem('c64State', JSON.stringify(snap));
-            } catch (e) { // ignore }
+            } catch (e) {
+                // ignore
             }
         }
-        window.addEventListener('beforeunload', saveState);
-        window.addEventListener('pagehide', saveState);
     }
+    window.addEventListener('beforeunload', saveState);
+    window.addEventListener('pagehide', saveState);
 }

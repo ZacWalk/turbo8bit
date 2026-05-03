@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}Commodore 64 Emulator - Turbo8bit{% endblock %}
+{% block description %}Run BASIC programs in an in-browser Commodore 64 emulator. Type, edit, and execute classic C64 BASIC V2 code with a fully interactive virtual machine.{% endblock %}
 
 {% block content %}
 <div class="c64-page">
@@ -125,6 +126,10 @@ let examplesByKey = {};
 // Fetch and populate sample selector from JSON index
 async function initExamples() {
     const response = await fetch("{{ url_for('static', filename='basic/index.json') }}");
+    if (!response.ok) {
+        console.error(`Failed to load BASIC examples index: HTTP ${response.status}`);
+        return;
+    }
     const data = await response.json();
     examplesIndex = data;
     
@@ -169,6 +174,10 @@ async function loadExampleCode(id) {
     const example = examplesByKey[id];
     if (!example) return '';
     const response = await fetch("{{ url_for('static', filename='basic/') }}" + example.file);
+    if (!response.ok) {
+        console.error(`Failed to load BASIC example '${id}': HTTP ${response.status}`);
+        return '';
+    }
     return await response.text();
 }
 

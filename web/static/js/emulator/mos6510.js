@@ -205,21 +205,21 @@ export class MOS6510 {
             case 0x00: this.brk(); break;
 
             // ORA
-            case 0x01: this.ora(this.addrIndirectX()); break;
-            case 0x05: this.ora(this.addrZeroPage()); break;
-            case 0x09: this.ora(this.addrImmediate()); break;
-            case 0x0d: this.ora(this.addrAbsolute()); break;
+            case 0x01: this.ora(this.addrIndirectX()); this.cycles += 6; break;
+            case 0x05: this.ora(this.addrZeroPage()); this.cycles += 3; break;
+            case 0x09: this.ora(this.addrImmediate()); this.cycles += 2; break;
+            case 0x0d: this.ora(this.addrAbsolute()); this.cycles += 4; break;
             case 0x11: this.ora(this.addrIndirectY()); break;
-            case 0x15: this.ora(this.addrZeroPageX()); break;
+            case 0x15: this.ora(this.addrZeroPageX()); this.cycles += 4; break;
             case 0x19: this.ora(this.addrAbsoluteY()); break;
             case 0x1d: this.ora(this.addrAbsoluteX()); break;
 
-            // ASL
+            // ASL (RMW: abs,X is always 7 cycles, use Store addressing to skip page-cross penalty)
             case 0x06: this.aslMem(this.addrZeroPage()); break;
             case 0x0a: this.aslA(); break;
-            case 0x0e: this.aslMem(this.addrAbsolute()); break;
-            case 0x16: this.aslMem(this.addrZeroPageX()); break;
-            case 0x1e: this.aslMem(this.addrAbsoluteX()); break;
+            case 0x0e: this.aslMem(this.addrAbsolute()); this.cycles += 1; break;
+            case 0x16: this.aslMem(this.addrZeroPageX()); this.cycles += 1; break;
+            case 0x1e: this.aslMem(this.addrAbsoluteXStore()); this.cycles += 2; break;
 
             // PHP
             case 0x08: this.php(); break;
@@ -234,25 +234,25 @@ export class MOS6510 {
             case 0x20: this.jsr(); break;
 
             // AND
-            case 0x21: this.and(this.addrIndirectX()); break;
-            case 0x25: this.and(this.addrZeroPage()); break;
-            case 0x29: this.and(this.addrImmediate()); break;
-            case 0x2d: this.and(this.addrAbsolute()); break;
+            case 0x21: this.and(this.addrIndirectX()); this.cycles += 6; break;
+            case 0x25: this.and(this.addrZeroPage()); this.cycles += 3; break;
+            case 0x29: this.and(this.addrImmediate()); this.cycles += 2; break;
+            case 0x2d: this.and(this.addrAbsolute()); this.cycles += 4; break;
             case 0x31: this.and(this.addrIndirectY()); break;
-            case 0x35: this.and(this.addrZeroPageX()); break;
+            case 0x35: this.and(this.addrZeroPageX()); this.cycles += 4; break;
             case 0x39: this.and(this.addrAbsoluteY()); break;
             case 0x3d: this.and(this.addrAbsoluteX()); break;
 
             // BIT
-            case 0x24: this.bit(this.addrZeroPage()); break;
-            case 0x2c: this.bit(this.addrAbsolute()); break;
+            case 0x24: this.bit(this.addrZeroPage()); this.cycles += 3; break;
+            case 0x2c: this.bit(this.addrAbsolute()); this.cycles += 4; break;
 
-            // ROL
+            // ROL (RMW: abs,X is always 7 cycles)
             case 0x26: this.rolMem(this.addrZeroPage()); break;
             case 0x2a: this.rolA(); break;
-            case 0x2e: this.rolMem(this.addrAbsolute()); break;
-            case 0x36: this.rolMem(this.addrZeroPageX()); break;
-            case 0x3e: this.rolMem(this.addrAbsoluteX()); break;
+            case 0x2e: this.rolMem(this.addrAbsolute()); this.cycles += 1; break;
+            case 0x36: this.rolMem(this.addrZeroPageX()); this.cycles += 1; break;
+            case 0x3e: this.rolMem(this.addrAbsoluteXStore()); this.cycles += 2; break;
 
             // PLP
             case 0x28: this.plp(); break;
@@ -267,21 +267,21 @@ export class MOS6510 {
             case 0x40: this.rti(); break;
 
             // EOR
-            case 0x41: this.eor(this.addrIndirectX()); break;
-            case 0x45: this.eor(this.addrZeroPage()); break;
-            case 0x49: this.eor(this.addrImmediate()); break;
-            case 0x4d: this.eor(this.addrAbsolute()); break;
+            case 0x41: this.eor(this.addrIndirectX()); this.cycles += 6; break;
+            case 0x45: this.eor(this.addrZeroPage()); this.cycles += 3; break;
+            case 0x49: this.eor(this.addrImmediate()); this.cycles += 2; break;
+            case 0x4d: this.eor(this.addrAbsolute()); this.cycles += 4; break;
             case 0x51: this.eor(this.addrIndirectY()); break;
-            case 0x55: this.eor(this.addrZeroPageX()); break;
+            case 0x55: this.eor(this.addrZeroPageX()); this.cycles += 4; break;
             case 0x59: this.eor(this.addrAbsoluteY()); break;
             case 0x5d: this.eor(this.addrAbsoluteX()); break;
 
-            // LSR
+            // LSR (RMW: abs,X is always 7 cycles)
             case 0x46: this.lsrMem(this.addrZeroPage()); break;
             case 0x4a: this.lsrA(); break;
-            case 0x4e: this.lsrMem(this.addrAbsolute()); break;
-            case 0x56: this.lsrMem(this.addrZeroPageX()); break;
-            case 0x5e: this.lsrMem(this.addrAbsoluteX()); break;
+            case 0x4e: this.lsrMem(this.addrAbsolute()); this.cycles += 1; break;
+            case 0x56: this.lsrMem(this.addrZeroPageX()); this.cycles += 1; break;
+            case 0x5e: this.lsrMem(this.addrAbsoluteXStore()); this.cycles += 2; break;
 
             // PHA
             case 0x48: this.push(this.A); this.cycles += 3; break;
@@ -300,21 +300,21 @@ export class MOS6510 {
             case 0x60: this.rts(); break;
 
             // ADC
-            case 0x61: this.adc(this.addrIndirectX()); break;
-            case 0x65: this.adc(this.addrZeroPage()); break;
-            case 0x69: this.adc(this.addrImmediate()); break;
-            case 0x6d: this.adc(this.addrAbsolute()); break;
+            case 0x61: this.adc(this.addrIndirectX()); this.cycles += 6; break;
+            case 0x65: this.adc(this.addrZeroPage()); this.cycles += 3; break;
+            case 0x69: this.adc(this.addrImmediate()); this.cycles += 2; break;
+            case 0x6d: this.adc(this.addrAbsolute()); this.cycles += 4; break;
             case 0x71: this.adc(this.addrIndirectY()); break;
-            case 0x75: this.adc(this.addrZeroPageX()); break;
+            case 0x75: this.adc(this.addrZeroPageX()); this.cycles += 4; break;
             case 0x79: this.adc(this.addrAbsoluteY()); break;
             case 0x7d: this.adc(this.addrAbsoluteX()); break;
 
-            // ROR
+            // ROR (RMW: abs,X is always 7 cycles)
             case 0x66: this.rorMem(this.addrZeroPage()); break;
             case 0x6a: this.rorA(); break;
-            case 0x6e: this.rorMem(this.addrAbsolute()); break;
-            case 0x76: this.rorMem(this.addrZeroPageX()); break;
-            case 0x7e: this.rorMem(this.addrAbsoluteX()); break;
+            case 0x6e: this.rorMem(this.addrAbsolute()); this.cycles += 1; break;
+            case 0x76: this.rorMem(this.addrZeroPageX()); this.cycles += 1; break;
+            case 0x7e: this.rorMem(this.addrAbsoluteXStore()); this.cycles += 2; break;
 
             // PLA
             case 0x68: this.A = this.setNZ(this.pop()); this.cycles += 4; break;
@@ -413,11 +413,11 @@ export class MOS6510 {
             case 0xd9: this.cmp(this.A, this.read(this.addrAbsoluteY())); break;
             case 0xdd: this.cmp(this.A, this.read(this.addrAbsoluteX())); break;
 
-            // DEC
+            // DEC (RMW: abs,X is always 7 cycles)
             case 0xc6: this.decMem(this.addrZeroPage()); break;
-            case 0xce: this.decMem(this.addrAbsolute()); break;
-            case 0xd6: this.decMem(this.addrZeroPageX()); break;
-            case 0xde: this.decMem(this.addrAbsoluteX()); break;
+            case 0xce: this.decMem(this.addrAbsolute()); this.cycles += 1; break;
+            case 0xd6: this.decMem(this.addrZeroPageX()); this.cycles += 1; break;
+            case 0xde: this.decMem(this.addrAbsoluteXStore()); this.cycles += 2; break;
 
             // INY
             case 0xc8: this.Y = this.setNZ((this.Y + 1) & 0xff); this.cycles += 2; break;
@@ -437,21 +437,21 @@ export class MOS6510 {
             case 0xec: this.cmp(this.X, this.read(this.addrAbsolute())); this.cycles += 4; break;
 
             // SBC
-            case 0xe1: this.sbc(this.addrIndirectX()); break;
-            case 0xe5: this.sbc(this.addrZeroPage()); break;
-            case 0xe9: this.sbc(this.addrImmediate()); break;
-            case 0xeb: this.sbc(this.addrImmediate()); break; // Undocumented
-            case 0xed: this.sbc(this.addrAbsolute()); break;
+            case 0xe1: this.sbc(this.addrIndirectX()); this.cycles += 6; break;
+            case 0xe5: this.sbc(this.addrZeroPage()); this.cycles += 3; break;
+            case 0xe9: this.sbc(this.addrImmediate()); this.cycles += 2; break;
+            case 0xeb: this.sbc(this.addrImmediate()); this.cycles += 2; break; // Undocumented
+            case 0xed: this.sbc(this.addrAbsolute()); this.cycles += 4; break;
             case 0xf1: this.sbc(this.addrIndirectY()); break;
-            case 0xf5: this.sbc(this.addrZeroPageX()); break;
+            case 0xf5: this.sbc(this.addrZeroPageX()); this.cycles += 4; break;
             case 0xf9: this.sbc(this.addrAbsoluteY()); break;
             case 0xfd: this.sbc(this.addrAbsoluteX()); break;
 
-            // INC
+            // INC (RMW: abs,X is always 7 cycles)
             case 0xe6: this.incMem(this.addrZeroPage()); break;
-            case 0xee: this.incMem(this.addrAbsolute()); break;
-            case 0xf6: this.incMem(this.addrZeroPageX()); break;
-            case 0xfe: this.incMem(this.addrAbsoluteX()); break;
+            case 0xee: this.incMem(this.addrAbsolute()); this.cycles += 1; break;
+            case 0xf6: this.incMem(this.addrZeroPageX()); this.cycles += 1; break;
+            case 0xfe: this.incMem(this.addrAbsoluteXStore()); this.cycles += 2; break;
 
             // INX
             case 0xe8: this.X = this.setNZ((this.X + 1) & 0xff); this.cycles += 2; break;
@@ -749,7 +749,7 @@ export class MOS6510 {
         if (value & 0x80) this.P |= FLAG_N;
         if (value & 0x40) this.P |= FLAG_V;
         if ((this.A & value) === 0) this.P |= FLAG_Z;
-        this.cycles += 3;
+        // Cycles added per case (3 for zp, 4 for abs)
     }
 
     adc(addr) {
