@@ -17,7 +17,36 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
+
+_IS_PROD = os.environ.get("GAE_ENV", "").startswith("standard")
+_secret = os.environ.get("SECRET_KEY")
+if not _secret:
+    if _IS_PROD:
+        raise RuntimeError("SECRET_KEY environment variable must be set in production")
+    _secret = os.urandom(24)
+app.secret_key = _secret
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=_IS_PROD,
+)
+
+
+@app.after_request
+def _security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "geolocation=(), microphone=(), camera=(), payment=()",
+    )
+    if _IS_PROD:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 # Canonical public host. All SEO URLs (canonical, OG, sitemap) are built from
 # this, and any request hitting a different host (e.g. the default
@@ -116,9 +145,15 @@ def google_auth():
             token, google_requests.Request(), GOOGLE_CLIENT_ID
         )
 
+        # Wipe any pre-login state (e.g. CSRF token of an unauth'd visitor)
+        # before stamping the verified identity onto the session.
+        session.clear()
         session["user_email"] = idinfo.get("email")
         session["user_name"] = idinfo.get("name")
-        session["user_picture"] = idinfo.get("picture")
+        # Only trust an https:// picture URL. Refuse javascript:/data:/etc.
+        picture = idinfo.get("picture") or ""
+        if isinstance(picture, str) and urlparse(picture).scheme == "https":
+            session["user_picture"] = picture
 
         return redirect(_safe_redirect_target(request.form.get("next")))
     except Exception as e:

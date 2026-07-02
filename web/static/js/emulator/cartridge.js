@@ -289,6 +289,19 @@ export class Cartridge {
             const loadAddress = view.getUint16(offset + CHIP_HEADER.LOAD_ADDRESS, false);
             const romSize = view.getUint16(offset + CHIP_HEADER.ROM_SIZE, false);
 
+            // Sanity-check sizes from the (potentially malformed) file before
+            // we slice. A 16KB ROM bank is the C64 maximum; the packet must be
+            // at least the CHIP header plus rom data and must not run past EOF.
+            if (romSize === 0 || romSize > 0x4000) {
+                console.error(`Invalid CHIP ROM size ${romSize} at offset ${offset}`);
+                break;
+            }
+            if (packetLength < CHIP_HEADER.ROM_DATA + romSize ||
+                offset + packetLength > data.byteLength) {
+                console.error(`Invalid CHIP packet length ${packetLength} at offset ${offset}`);
+                break;
+            }
+
             const bank = new ChipBank();
             bank.type = chipType;
             bank.bankNumber = bankNumber;

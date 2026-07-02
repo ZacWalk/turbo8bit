@@ -82,6 +82,11 @@ export function parseSidFile(buffer) {
     const isRSID = magic === RSID_MAGIC;
     const version = view.getUint16(4, false);
     const dataOffset = view.getUint16(6, false);
+    // PSID v1 header is 0x76 bytes, v2+ is 0x7C. Reject anything that would
+    // point us before the header end or past the end of the file.
+    if (dataOffset < 0x76 || dataOffset >= buffer.byteLength) {
+        throw new Error(`Invalid PSID/RSID dataOffset: ${dataOffset}`);
+    }
     const loadAddress = view.getUint16(8, false);
     const initAddress = view.getUint16(10, false);
     const playAddress = view.getUint16(12, false);
@@ -116,6 +121,9 @@ export function parseSidFile(buffer) {
 
     // If load address is 0, first two bytes are the actual load address
     if (loadAddress === 0) {
+        if (programData.length < 2) {
+            throw new Error('PSID/RSID data too short for embedded load address');
+        }
         actualLoadAddress = programData[0] | (programData[1] << 8);
         programData = programData.subarray(2);
     }
