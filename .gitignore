@@ -43,7 +43,11 @@ htmlcov/
 .tox/
 
 # Project-specific
-raw-images/
+# Exclude the contents, not the directory itself, so the negation below works
+# (git never descends into an excluded directory).
+raw-images/*
+# The brand logo is a build input: tools/gen_favicons.py generates the icons from it
+!raw-images/favicon.png
 libsidplayfp/
 
 # CRT files (stored in cloud storage)

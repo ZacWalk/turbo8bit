@@ -21,31 +21,35 @@ The site features interactive C64 history, hardware documentation, a SID chip pl
 ## Project Structure
 
 ```
-├── dd.ps1                  # CLI tool: run, deploy, test, gen, format
+├── dd.ps1                  # CLI tool: run, deploy, test, gen, format, crt
+├── crt/                    # Cartridge images published to Cloud Storage
+├── memory-map.txt          # Source data for tools/parse_memmap.py
 ├── web/                    # Flask application
-│   ├── main.py             # Routes and Flask app
+│   ├── main.py             # Routes, SEO, auth, SITE_PAGES (nav + sitemap)
 │   ├── app.yaml            # Google App Engine configuration
 │   ├── requirements.txt    # Python dependencies
 │   ├── templates/          # Jinja2 templates
-│   │   ├── base.html       # Base template with header/footer
-│   │   ├── index.html      # C64 timeline homepage
-│   │   ├── c64.html        # C64 emulator page
-│   │   ├── hardware.html   # Hardware block diagram
+│   │   ├── base.html       # Header/nav/footer shell
+│   │   ├── index.html      # BASIC lab (emulator + BASIC editor)
+│   │   ├── asm.html        # Assembly lab (emulator + assembler + debugger)
+│   │   ├── hardware.html   # Bus simulator + chip reference
 │   │   ├── memmap.html     # Memory map explorer
-│   │   ├── sid.html        # SID chip info and player
-│   │   ├── library.html    # PDF book library
-│   │   └── about.html      # About page
+│   │   ├── sid.html        # SID chip info and music player
+│   │   ├── about.html      # About page
+│   │   └── sitemap.xml     # Sitemap template
 │   └── static/
 │       ├── css/style.css   # C64-themed retro styles
+│       ├── basic/          # BASIC sample programs + index.json
+│       ├── assembly/       # Assembly sample programs + index.json
 │       ├── js/
-│       │   ├── timeline.js # Timeline scrolling and effects
-│       │   ├── hardware.js # Hardware diagram interactions
-│       │   ├── memmap.js   # Memory map explorer
-│       │   ├── covers.js   # Cover sprite sheet data
-│       │   ├── sprites.js  # Sprite sheet handling
-│       │   └── emulator/   # C64 & SID emulator modules (ES6)
-│       │       ├── emulator.js         # C64Emulator UI (entry point for index.html)
-│       │       ├── sid-player.js       # SIDPlayer class (entry point for sid.html)
+│       │   ├── examples.js     # Sample picker shared by / and /asm
+│       │   ├── hardware.js     # Bus simulation canvas + scenarios
+│       │   ├── memmap.js       # Memory map explorer
+│       │   ├── chip3d.js       # Three.js DIP chip renderer
+│       │   ├── memmap-data.json
+│       │   └── emulator/       # C64 & SID emulator modules (ES6)
+│       │       ├── emulator.js         # C64Emulator UI (entry point for / and /asm)
+│       │       ├── sid-player.js       # SIDPlayer class (entry point for /sid)
 │       │       ├── machine.js          # C64Machine + clock constants
 │       │       ├── mos6510.js          # 6510 CPU emulator
 │       │       ├── roms.js             # C64 ROM data (BASIC, KERNAL, CHARS)
@@ -55,43 +59,37 @@ The site features interactive C64 history, hardware documentation, a SID chip pl
 │       │       ├── filter.js           # SID filter + external filter
 │       │       ├── vic-ii.js           # VIC-II graphics rendering (5 display modes)
 │       │       ├── cartridge.js        # CRT cartridge format + bank switching
+│       │       ├── assembler.js        # 6502 assembler + disassembler
+│       │       ├── basic-tokenizer.js  # BASIC tokenizer + syntax highlighting
+│       │       ├── debugger.js         # Stepping/breakpoint state machine
 │       │       └── editor.js           # Syntax-highlighted code editor
 │       ├── sid/            # SID music files (.sid format)
-│       ├── pdf/            # C64 programming books (PDF)
-│       └── screenshots/    # Cover images
-├── raw-images/             # Source images for cover generation
+│       └── icons/          # Generated favicons + OG image
 ├── tools/                  # CLI utilities
-│   ├── build_covers.py     # Generate cover sprite sheets
-│   ├── entities.py         # Data management CLI
-│   ├── fetch_wiki_data.py  # Wikipedia data fetcher
-│   ├── populate_entities.py
-│   ├── parse_memmap.py     # Memory map parser
-│   ├── update_things.py
-│   └── wiki.py             # Wikipedia helper
+│   ├── gen_favicons.py     # Generate favicons + social image
+│   └── parse_memmap.py     # Memory map parser
 └── tests/                  # Test suite (pytest + py_mini_racer)
-    ├── conftest.py         # Shared fixtures
-    ├── test_sid_load.py    # SID file loading tests
-    ├── test_sid_*.py       # Various SID tests
-    ├── test_giana_*.py     # Great Giana Sisters specific tests
-    └── test_*.py           # Other JavaScript tests
 ```
 
 ## CLI Tool (dd.ps1)
 - `.\dd.ps1 run` - Start local dev server at http://localhost:8082
 - `.\dd.ps1 test` - Run all tests using pytest
 - `.\dd.ps1 deploy` - Deploy to Google App Engine
-- `.\dd.ps1 gen` - Generate cover sprites from raw-images/
+- `.\dd.ps1 gen` - Regenerate favicons and the social image
+- `.\dd.ps1 crt` - Publish CRT cartridge files to Cloud Storage
 - `.\dd.ps1 format` - Format Python files with Black
 - `.\dd.ps1 help` - Show all commands
 
 ## Routes
-- `/` - C64 timeline homepage
-- `/c64` - Interactive C64 emulator
-- `/hardware` - C64 hardware block diagram
-- `/memmap` - Memory map explorer
+- `/` - BASIC lab: emulator + BASIC editor
+- `/asm` - Assembly lab: emulator + assembler + step debugger
+- `/hardware` - Bus simulation and chip reference
+- `/memmap` - Memory map / bank switching explorer
 - `/sid` - SID chip information and music player
-- `/library` - PDF book library
 - `/about` - About page
+
+Routes, nav labels and sitemap entries all come from `SITE_PAGES` in
+[web/main.py](web/main.py) - add a page there and the nav and sitemap follow.
 
 ## Testing Strategy
 
@@ -200,8 +198,12 @@ All interactive screens follow a consistent **two-panel layout** pattern for a u
 | `/` (BASIC) | C64 Emulator screen | BASIC code editor | BASIC Quick Start |
 | `/asm` | C64 Emulator + registers | Assembly editor | 6502 Quick Start |
 | `/hardware` | Bus simulation canvas | Scenario controls + log | Chip reference cards |
-| `/memmap` | Banking controls + legend | Memory map table | Memory regions guide |
+| `/memmap` | Banking controls | Memory map table (+ region details) | Memory regions guide |
 | `/sid` | Voice visualizer + filter | Song selector + registers | SID chip documentation |
+
+`/` and `/asm` use the emulator-specific `.c64-page` variant of this layout;
+`/hardware`, `/memmap` and `/sid` use `.workspace`. `/memmap` adds a third
+`.workspace-tertiary` column for region details.
 
 ### CSS Classes
 

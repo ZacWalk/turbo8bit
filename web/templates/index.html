@@ -8,6 +8,10 @@
     <!-- Emulator Panel -->
     <div class="c64-emulator-column">
         <div class="c64-emulator-panel">
+            <div class="panel-header">
+                <h2>C64 SCREEN</h2>
+            </div>
+
             <canvas id="screen" width="384" height="272"></canvas>
             
             <div class="c64-controls">
@@ -33,10 +37,12 @@
     
     <!-- BASIC Editor Panel -->
     <div class="c64-editor-panel">
-        <div class="sample-selector">
-            <span class="sample-label">Load BASIC Sample:</span>
-            <select id="sampleSelect" onchange="loadSelectedSample()">
-            </select>
+        <div class="panel-header">
+            <h2>BASIC PROGRAM</h2>
+            <div class="sample-selector">
+                <label class="sample-label" for="sampleSelect">Sample:</label>
+                <select id="sampleSelect" onchange="loadSelectedSample()"></select>
+            </div>
         </div>
         
         <div id="basic-editor"></div>
@@ -118,68 +124,14 @@
 import { C64Emulator } from "{{ url_for('static', filename='js/emulator/emulator.js') }}";
 import { CodeEditor } from "{{ url_for('static', filename='js/emulator/editor.js') }}";
 import { BASIC_START } from "{{ url_for('static', filename='js/emulator/basic-tokenizer.js') }}";
+import { ExampleLibrary } from "{{ url_for('static', filename='js/examples.js') }}";
 
-// Example metadata loaded from JSON
-let examplesIndex = {};
-let examplesByKey = {};
+const DEFAULT_EXAMPLE = 'helloWorld';
 
-// Fetch and populate sample selector from JSON index
-async function initExamples() {
-    const response = await fetch("{{ url_for('static', filename='basic/index.json') }}");
-    if (!response.ok) {
-        console.error(`Failed to load BASIC examples index: HTTP ${response.status}`);
-        return;
-    }
-    const data = await response.json();
-    examplesIndex = data;
-    
-    // Build lookup by ID
-    for (const example of data.examples) {
-        examplesByKey[example.id] = example;
-    }
-    
-    // Populate dropdown grouped by category
-    const select = document.getElementById('sampleSelect');
-    const categories = {};
-    
-    for (const example of data.examples) {
-        if (!categories[example.category]) {
-            categories[example.category] = [];
-        }
-        categories[example.category].push(example);
-    }
-    
-    for (const [category, examples] of Object.entries(categories)) {
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = category;
-        for (const example of examples) {
-            const option = document.createElement('option');
-            option.value = example.id;
-            option.textContent = example.title;
-            optgroup.appendChild(option);
-        }
-        select.appendChild(optgroup);
-    }
-    
-    // Load default example
-    const defaultKey = 'helloWorld';
-    const code = await loadExampleCode(defaultKey);
-    editor.setValue(code);
-    document.getElementById('sampleSelect').value = defaultKey;
-    currentExampleKey = defaultKey;
-}
-
-// Load example code from file
-async function loadExampleCode(id) {
-    const example = examplesByKey[id];
-    if (!example) return '';
-    const response = await fetch("{{ url_for('static', filename='basic/') }}" + example.file);
-    if (!response.ok) {
-        console.error(`Failed to load BASIC example '${id}': HTTP ${response.status}`);
-        return '';
-    }
-    return await response.text();
-}
+const examples = new ExampleLibrary(
+    "{{ url_for('static', filename='basic/index.json') }}",
+    "{{ url_for('static', filename='basic/') }}"
+);
 
 // Initialize emulator
 const emulator = new C64Emulator('screen', { audioEnabled: false });
@@ -195,26 +147,35 @@ const editor = new CodeEditor('#basic-editor', {
         loadBasicProgram(result);
     }
 });
+window.editor = editor;
 
 // Track which example is currently loaded
-let currentExampleKey = 'helloWorld';
+let currentExampleKey = DEFAULT_EXAMPLE;
 
-// Initialize examples after editor is ready
+const sampleSelect = document.getElementById('sampleSelect');
+
+async function initExamples() {
+    try {
+        await examples.populate(sampleSelect);
+        sampleSelect.value = DEFAULT_EXAMPLE;
+        await loadSelectedSample();
+    } catch (e) {
+        console.error(e);
+        editor.setValue('REM Could not load the sample programs.');
+    }
+}
 initExamples();
-window.editor = editor;
 
 // Load sample from dropdown
 async function loadSelectedSample() {
-    const select = document.getElementById('sampleSelect');
-    const id = select.value;
-    const example = examplesByKey[id];
-    if (example) {
-        currentExampleKey = id;
-        const code = await loadExampleCode(id);
-        editor.setValue(code);
-        // Disable error highlighting for direct mode examples
-        editor.setHighlightErrors(!example.direct);
-    }
+    const id = sampleSelect.value;
+    const example = examples.get(id);
+    if (!example) return;
+    currentExampleKey = id;
+    editor.setValue(await examples.source(id));
+    // Direct-mode samples have no line numbers, so BASIC error checking would
+    // flag every line.
+    editor.setHighlightErrors(!example.direct);
 }
 window.loadSelectedSample = loadSelectedSample;
 
@@ -224,10 +185,10 @@ window.loadSelectedSample = loadSelectedSample;
 //
 async function loadBasicProgram(result) {
     // Check if this is a direct mode example - type commands instead of tokenizing
-    const currentExample = examplesByKey[currentExampleKey];
+    const currentExample = examples.get(currentExampleKey);
     if (currentExample && currentExample.direct) {
         // Type direct mode commands into the emulator
-        const code = await loadExampleCode(currentExampleKey);
+        const code = await examples.source(currentExampleKey);
         const lines = code.split('\n').filter(l => l.trim());
         let delay = 100;
         for (const line of lines) {

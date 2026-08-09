@@ -72,7 +72,10 @@
     <div class="motherboard-section">
         <p class="section-intro">The C64C motherboard with key chips labeled. The C64's architecture is elegantly simple yet powerful.</p>
         <div class="motherboard-image-container">
-            <img src="/static/C64Cmotherboard.annotated.png" alt="Annotated C64C Motherboard showing chip locations" class="motherboard-image">
+            <img src="{{ url_for('static', filename='C64Cmotherboard.annotated.png') }}"
+                 alt="Annotated C64C Motherboard showing chip locations"
+                 class="motherboard-image"
+                 width="2048" height="730" loading="lazy" decoding="async">
         </div>
     </div>
     

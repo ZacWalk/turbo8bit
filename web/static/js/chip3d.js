@@ -28,6 +28,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+// The only brand mark we ship artwork for; other brands render as text.
+const LOGO_IMAGE = '/static/mos.png';
+
 //
 // Create a chip label texture with MOS/CSG logo and text
 // @param {Object} options - Texture options
@@ -58,7 +61,6 @@ export function createChipTexture(options = {}) {
 
     // Try to load logo image, fall back to text if not available
     const img = new Image();
-    const logoFile = logo === 'CSG' ? '/static/csg.png' : '/static/mos.png';
 
     // Function to draw chip text (called after logo or on error)
     const drawChipText = () => {
@@ -102,7 +104,12 @@ export function createChipTexture(options = {}) {
         drawTextLogo();
     };
 
-    img.src = logoFile;
+    // Only MOS ships as artwork; every other brand falls back to a text logo.
+    if (logo === 'MOS') {
+        img.src = LOGO_IMAGE;
+    } else {
+        drawTextLogo();
+    }
 
     // Draw initial text in case image loading takes time
     drawChipText();

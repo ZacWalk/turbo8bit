@@ -63,16 +63,14 @@
 <body>
     <header class="site-header">
         <a href="/" class="site-brand">
-            <img class="site-brand-logo" src="{{ url_for('static', filename='favicon.png') }}" alt="Turbo8bit logo">
+            <img class="site-brand-logo" src="{{ url_for('static', filename='icons/favicon-192.png') }}" alt="" width="192" height="192">
             <span class="site-brand-text">Turbo8bit</span>
         </a>
-        <nav class="main-nav">
-            <a href="/">BASIC</a>
-            <a href="/asm">Assembly</a>
-            <a href="/hardware">Hardware</a>
-            <a href="/memmap">Memory</a>
-            <a href="/sid">SID</a>
-            <a href="/about">About</a>
+        <nav class="main-nav" aria-label="Main">
+            {% for path, label, blurb in NAV_ITEMS %}
+            <a href="{{ path }}" title="{{ blurb }}"
+               {%- if request.path == path %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+            {% endfor %}
         </nav>
         <div class="user-auth">
             {% if user.email %}

@@ -1,5 +1,6 @@
 import os
 from datetime import date
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 from flask import (
@@ -47,6 +48,7 @@ def _security_headers(response):
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
     return response
+
 
 # Canonical public host. All SEO URLs (canonical, OG, sitemap) are built from
 # this, and any request hitting a different host (e.g. the default
@@ -139,7 +141,7 @@ def google_auth():
     token = request.form.get("credential")
     if not token:
         abort(400, "No credential provided")
-    
+
     try:
         idinfo = id_token.verify_oauth2_token(
             token, google_requests.Request(), GOOGLE_CLIENT_ID
@@ -168,6 +170,69 @@ def logout():
     """Log out the current user."""
     session.clear()
     return redirect(url_for("index"))
+
+
+# ---------------------------------------------------------------------------
+# Site structure
+# ---------------------------------------------------------------------------
+
+
+class Page(NamedTuple):
+    """A public page: its nav entry and its sitemap metadata."""
+
+    endpoint: str
+    label: str  # Nav label
+    blurb: str  # One-line "what is this page for", shown as a nav tooltip
+    changefreq: str
+    priority: str
+
+
+# Single source of truth for the public site. Adding a page here wires up both
+# the nav and the sitemap.
+SITE_PAGES = [
+    Page(
+        "index",
+        "BASIC",
+        "Write and run Commodore 64 BASIC in the browser",
+        "monthly",
+        "1.0",
+    ),
+    Page(
+        "asm",
+        "Assembly",
+        "Assemble, run and single-step 6502 machine code",
+        "monthly",
+        "0.9",
+    ),
+    Page(
+        "hardware",
+        "Hardware",
+        "Watch the chips talk over the address and data buses",
+        "monthly",
+        "0.9",
+    ),
+    Page(
+        "memmap",
+        "Memory",
+        "See how banking maps ROM, RAM and I/O into 64KB",
+        "monthly",
+        "0.9",
+    ),
+    Page(
+        "sid", "SID", "Play SID tunes and watch the sound chip work", "monthly", "0.9"
+    ),
+    Page("about", "About", "What this site is and who made it", "yearly", "0.5"),
+]
+
+
+@app.context_processor
+def inject_nav():
+    """Expose the nav as (path, label, blurb) triples for base.html."""
+    return {
+        "NAV_ITEMS": [
+            (url_for(page.endpoint), page.label, page.blurb) for page in SITE_PAGES
+        ]
+    }
 
 
 @app.route("/")
@@ -210,17 +275,6 @@ def about():
 # SEO: robots.txt and sitemap.xml
 # ---------------------------------------------------------------------------
 
-# Public, indexable routes paired with sitemap metadata.
-# (endpoint, changefreq, priority)
-SITEMAP_ROUTES = [
-    ("index", "monthly", "1.0"),
-    ("asm", "monthly", "0.9"),
-    ("hardware", "monthly", "0.9"),
-    ("memmap", "monthly", "0.9"),
-    ("sid", "monthly", "0.9"),
-    ("about", "yearly", "0.5"),
-]
-
 
 @app.route("/robots.txt")
 def robots_txt():
@@ -241,13 +295,13 @@ def sitemap_xml():
     """Serve a sitemap.xml listing all public pages."""
     today = date.today().isoformat()
     urls = []
-    for endpoint, changefreq, priority in SITEMAP_ROUTES:
+    for page in SITE_PAGES:
         urls.append(
             {
-                "loc": canonical_url_for(endpoint),
+                "loc": canonical_url_for(page.endpoint),
                 "lastmod": today,
-                "changefreq": changefreq,
-                "priority": priority,
+                "changefreq": page.changefreq,
+                "priority": page.priority,
             }
         )
     xml = render_template("sitemap.xml", urls=urls)

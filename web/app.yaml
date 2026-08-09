@@ -10,8 +10,19 @@ env_variables:
   # SECRET_KEY: "your-secret-key-here"
 
 handlers:
+# Immutable media: safe to cache for a long time.
+- url: /static/icons
+  static_dir: static/icons
+  expiration: "30d"
+  secure: always
+- url: /static/sid
+  static_dir: static/sid
+  expiration: "30d"
+  secure: always
+# Code and markup change on every deploy, so keep the window short.
 - url: /static
   static_dir: static
+  expiration: "1h"
   secure: always
 - url: /.*
   script: auto

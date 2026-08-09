@@ -45,19 +45,11 @@ export class C64Emulator {
         this.canvas = document.getElementById(id);
         this.ctx = this.canvas.getContext('2d');
         this.ctx.imageSmoothingEnabled = false;
-        this.scale = 2;
 
-        // Internal resolution includes border: 384x272
+        // Internal resolution includes border: 384x272. The displayed size and
+        // its 4:3 CRT aspect ratio are CSS's job (see #screen in style.css).
         this.canvas.width = 384;
         this.canvas.height = 272;
-
-        // 4:3 aspect ratio like original CRT
-        const displayHeight = this.canvas.height * this.scale;
-        const targetAspect = 4 / 3;
-        const displayWidth = Math.round(displayHeight * targetAspect);
-        this.canvas.style.height = displayHeight + "px";
-        this.canvas.style.width = displayWidth + "px";
-        this.canvas.style.maxWidth = displayWidth + "px";
 
         // Audio settings
         this.audioEnabled = options.audioEnabled !== false;
@@ -87,16 +79,8 @@ export class C64Emulator {
 
         // Audio driver (initialized when started)
         this.audioContext = null;
-        this.audioWorklet = null;
+        this.audioProcessor = null;
         this.audioBuffer = null;
-
-        // Debug info
-        console.log('Emulator initialized. Checking reset vector...');
-        const resetLo = this.machine.read(0xFFFC);
-        const resetHi = this.machine.read(0xFFFD);
-        const resetVector = resetLo | (resetHi << 8);
-        console.log(`Reset vector: 0x${resetVector.toString(16).padStart(4, '0')}`);
-        console.log(`Current CPU PC: 0x${this.machine.cpu.PC.toString(16).padStart(4, '0')}`);
     }
 
     reset() {
@@ -111,7 +95,6 @@ export class C64Emulator {
     async start() {
         if (this.running) return;
 
-        console.log('Starting emulator main loop...');
         this.running = true;
 
         // Initialize audio if enabled
@@ -162,7 +145,6 @@ export class C64Emulator {
             if (this.audioContext.state === 'suspended') {
                 try { await this.audioContext.resume(); } catch (e) { /* ignore */ }
             }
-            console.log('Audio initialized at', this.sampleRate, 'Hz');
         } catch (e) {
             console.warn('Failed to initialize audio:', e);
             this.audioEnabled = false;
@@ -173,9 +155,11 @@ export class C64Emulator {
         this.running = false;
         if (this.audioProcessor) {
             this.audioProcessor.disconnect();
+            this.audioProcessor = null;
         }
         if (this.audioContext) {
             this.audioContext.close();
+            this.audioContext = null;
         }
     }
 
@@ -211,7 +195,6 @@ export class C64Emulator {
         this.audioEnabled = true;
         this.machine.audioEnabled = true;
         await this.initAudio();
-        console.log('Audio enabled');
     }
 
     //
@@ -231,7 +214,6 @@ export class C64Emulator {
             this.audioContext.close();
             this.audioContext = null;
         }
-        console.log('Audio disabled');
     }
 
     breakExecution() {
@@ -370,7 +352,6 @@ export class C64Emulator {
             });
         }
         this.activeJoystick = port;
-        console.log(`Joystick ${port > 0 ? port : 'disabled'}`);
     }
 
     //

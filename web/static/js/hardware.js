@@ -14,7 +14,6 @@
 // - Optional 3D chip images via chip3d.js
 //
 // Used on the /hardware page of Turbo8bit.
-// For 3D version, see hardware-3d.js.
 // For chip rendering, see chip3d.js.
 //
 // @see https://www.turbo8bit.com/
@@ -239,6 +238,8 @@ function drawPackets() {
 }
 
 function render() {
+    if (!renderRunning) return;
+
     // Clear canvas with background color
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -254,10 +255,36 @@ function render() {
     requestAnimationFrame(render);
 }
 
+// The canvas animates continuously, so only run it while it is on screen.
+let renderRunning = false;
+
+function startRender() {
+    if (renderRunning) return;
+    renderRunning = true;
+    render();
+}
+
 // --- Simulation Logic ---
 
+// Every timer the running scenario has scheduled. Keeping them lets a new
+// scenario cancel the old one instead of interleaving its log lines with it.
+let scenarioTimers = [];
+
+function after(delay, fn) {
+    scenarioTimers.push(setTimeout(fn, delay));
+}
+
+function cancelScenario() {
+    scenarioTimers.forEach(clearTimeout);
+    scenarioTimers = [];
+    packets = [];
+}
+
+// A signal travels component -> spine -> component, one leg per interval.
+const SIGNAL_LEG_MS = 200;
+
 function sendSignal(from, to, type, delay = 0) {
-    setTimeout(() => {
+    after(delay, () => {
         const startComp = components[from];
         const endComp = components[to];
         const bus = components.BUS;
@@ -269,196 +296,120 @@ function sendSignal(from, to, type, delay = 0) {
         const yOffset = type === 'addr' ? -5 : 5;
         const spineX = type === 'addr' ? bus.x + bus.w * 0.33 : bus.x + bus.w * 0.66;
 
-        // Step 1: Component to Spine
-        let p1 = {
-            x: (from === 'BUS') ? spineX : (startComp.x + startComp.w),
-            y: startY + yOffset,
-            tx: spineX,
-            ty: startY + yOffset,
-            type: type,
-            finished: false
-        };
-
+        // Leg 1: component to spine
         if (from !== 'BUS') {
-            packets.push(p1);
+            packets.push({
+                x: startComp.x + startComp.w, y: startY + yOffset,
+                tx: spineX, ty: startY + yOffset,
+                type, finished: false
+            });
         }
 
-        // Step 2: Spine Vertical Move
-        setTimeout(() => {
-            let p2 = {
-                x: spineX,
-                y: startY + yOffset,
-                tx: spineX,
-                ty: endY + yOffset,
-                type: type,
-                finished: false
-            };
-            packets.push(p2);
+        // Leg 2: along the spine
+        after(SIGNAL_LEG_MS, () => {
+            packets.push({
+                x: spineX, y: startY + yOffset,
+                tx: spineX, ty: endY + yOffset,
+                type, finished: false
+            });
 
-            // Step 3: Spine to Target
-            setTimeout(() => {
-                let p3 = {
-                    x: spineX,
-                    y: endY + yOffset,
-                    tx: (to === 'BUS') ? spineX : endComp.x,
-                    ty: endY + yOffset,
-                    type: type,
-                    finished: false
-                };
-                if (to !== 'BUS') packets.push(p3);
-            }, 200);
-
-        }, 200);
-
-    }, delay);
+            // Leg 3: spine to target
+            after(SIGNAL_LEG_MS, () => {
+                if (to === 'BUS') return;
+                packets.push({
+                    x: spineX, y: endY + yOffset,
+                    tx: endComp.x, ty: endY + yOffset,
+                    type, finished: false
+                });
+            });
+        });
+    });
 }
 
-// Make runScenario global so it can be called from onclick
-window.runScenario = function (name) {
-    packets = []; // Clear existing
-    clearLog();
-    log("--- Starting: " + name.toUpperCase() + " ---");
+//
+// Scenarios are data, not code: each step fires at `at` milliseconds from the
+// start, writes its `log` lines and launches its `send` signals
+// ([from, to, type, delay]).
+//
+const SCENARIOS = {
+    boot: {
+        title: 'Power On / Boot',
+        steps: [
+            { at: 0, log: ['CPU resets. Looks for the reset vector at $FFFC.', 'MMU maps KERNAL ROM into the address space.'], send: [['CPU', 'MMU', 'addr']] },
+            { at: 400, send: [['MMU', 'ROM', 'addr']] },
+            { at: 1000, log: ['Super ROM sends the boot routine address to the CPU.'], send: [['ROM', 'CPU', 'data']] },
+            { at: 1800, log: ['CPU initialises the BASIC interpreter.'], send: [['CPU', 'ROM', 'addr']] },
+            { at: 2400, log: ['Super ROM returns the BASIC entry point.'], send: [['ROM', 'CPU', 'data']] },
+            { at: 3200, log: ['CPU checks RAM size and clears memory.'], send: [['CPU', 'RAM1', 'addr'], ['CPU', 'RAM2', 'data', 200]] },
+            { at: 4000, log: ['RAM confirms the memory test passed.'], send: [['RAM1', 'CPU', 'data']] },
+            { at: 4800, log: ['**** COMMODORE 64 BASIC V2 ****', '64K RAM SYSTEM  38911 BASIC BYTES FREE', 'READY.'] }
+        ]
+    },
 
-    if (name === 'boot') {
-        log("CPU Resets. Looks for reset vector at $FFFC.");
-        log("MMU maps KERNAL ROM into address space.");
-        sendSignal('CPU', 'MMU', 'addr', 0);
+    typing: {
+        title: 'Typing a Character',
+        steps: [
+            { at: 0, log: ['User presses a key on the keyboard.', 'CIA #1 detects the key matrix signal.'], send: [['CIA', 'CPU', 'data']] },
+            { at: 1000, log: ['CPU receives an IRQ from the CIA.', 'CPU reads the CIA to determine which key.'], send: [['CPU', 'CIA', 'addr']] },
+            { at: 1600, log: ['CIA returns the key scan code.'], send: [['CIA', 'CPU', 'data']] },
+            { at: 2400, log: ['CPU converts to PETSCII and writes to screen RAM.'], send: [['CPU', 'RAM1', 'addr'], ['CPU', 'RAM1', 'data', 200]] },
+            { at: 3200, log: ['VIC-II reads screen RAM during the next raster.'], send: [['VIC', 'RAM1', 'addr']] },
+            { at: 3800, log: ['RAM returns the character code to VIC-II.'], send: [['RAM1', 'VIC', 'data']] },
+            { at: 4400, log: ['Character appears on screen!'] }
+        ]
+    },
 
-        setTimeout(() => {
-            sendSignal('MMU', 'ROM', 'addr', 0);
-        }, 400);
+    vic: {
+        title: 'VIC-II Screen Refresh',
+        steps: [
+            { at: 0, log: ['VIC-II starts a new raster line.', 'VIC-II asserts BA (Bus Available) low.', 'CPU paused - VIC steals bus cycles!'] },
+            // Five character fetches, one every 400ms.
+            ...Array.from({ length: 5 }, (_, i) => ({
+                at: i * 400,
+                log: [`VIC-II fetches character ${i + 1} from screen RAM.`],
+                send: [['VIC', 'RAM1', 'addr'], ['RAM1', 'VIC', 'data', 300]]
+            })),
+            { at: 2200, log: ['VIC-II fetches character shapes from Super ROM.'], send: [['VIC', 'ROM', 'addr'], ['ROM', 'VIC', 'data', 400]] },
+            { at: 3200, log: ['VIC-II releases the bus (BA high).', 'CPU resumes execution.'] }
+        ]
+    },
 
-        setTimeout(() => {
-            log("Super ROM sends boot routine address to CPU.");
-            sendSignal('ROM', 'CPU', 'data', 0);
-        }, 1000);
-
-        setTimeout(() => {
-            log("CPU initializes BASIC interpreter.");
-            sendSignal('CPU', 'ROM', 'addr', 0);
-        }, 1800);
-
-        setTimeout(() => {
-            log("Super ROM returns BASIC entry point.");
-            sendSignal('ROM', 'CPU', 'data', 0);
-        }, 2400);
-
-        setTimeout(() => {
-            log("CPU checks RAM size and clears memory.");
-            sendSignal('CPU', 'RAM1', 'addr', 0);
-            sendSignal('CPU', 'RAM2', 'data', 200);
-        }, 3200);
-
-        setTimeout(() => {
-            log("RAM confirms memory test passed.");
-            sendSignal('RAM1', 'CPU', 'data', 0);
-        }, 4000);
-
-        setTimeout(() => {
-            log("**** COMMODORE 64 BASIC V2 ****");
-            log("64K RAM SYSTEM  38911 BASIC BYTES FREE");
-            log("READY.");
-        }, 4800);
-    }
-
-    if (name === 'typing') {
-        log("User presses a key on keyboard.");
-        log("CIA #1 detects key matrix signal.");
-        sendSignal('CIA', 'CPU', 'data', 0);
-
-        setTimeout(() => {
-            log("CPU receives IRQ interrupt from CIA.");
-            log("CPU reads CIA to determine which key.");
-            sendSignal('CPU', 'CIA', 'addr', 0);
-        }, 1000);
-
-        setTimeout(() => {
-            log("CIA returns key scan code.");
-            sendSignal('CIA', 'CPU', 'data', 0);
-        }, 1600);
-
-        setTimeout(() => {
-            log("CPU converts to PETSCII and writes to Screen RAM.");
-            sendSignal('CPU', 'RAM1', 'addr', 0);
-            sendSignal('CPU', 'RAM1', 'data', 200);
-        }, 2400);
-
-        setTimeout(() => {
-            log("VIC-II reads screen RAM during next raster.");
-            sendSignal('VIC', 'RAM1', 'addr', 0);
-        }, 3200);
-
-        setTimeout(() => {
-            log("RAM returns character code to VIC-II.");
-            sendSignal('RAM1', 'VIC', 'data', 0);
-        }, 3800);
-
-        setTimeout(() => {
-            log("Character appears on screen!");
-        }, 4400);
-    }
-
-    if (name === 'vic') {
-        log("VIC-II starts new raster line.");
-        log("VIC-II asserts BA (Bus Available) low.");
-        log("CPU paused - VIC steals bus cycles!");
-
-        // Burst of reads from VIC to RAM
-        for (let i = 0; i < 5; i++) {
-            setTimeout(() => {
-                log(`VIC-II fetches character ${i + 1} from Screen RAM.`);
-                sendSignal('VIC', 'RAM1', 'addr', 0);
-            }, i * 400);
-
-            setTimeout(() => {
-                sendSignal('RAM1', 'VIC', 'data', 0);
-            }, i * 400 + 300);
-        }
-
-        setTimeout(() => {
-            log("VIC-II fetches character shapes from Super ROM.");
-            sendSignal('VIC', 'ROM', 'addr', 0);
-        }, 2200);
-
-        setTimeout(() => {
-            sendSignal('ROM', 'VIC', 'data', 0);
-        }, 2600);
-
-        setTimeout(() => {
-            log("VIC-II releases bus (BA High).");
-            log("CPU resumes execution.");
-        }, 3200);
-    }
-
-    if (name === 'sound') {
-        log("BASIC executes: POKE 54296,15 (Volume max)");
-        sendSignal('CPU', 'SID', 'addr', 0);
-        sendSignal('CPU', 'SID', 'data', 200);
-
-        setTimeout(() => {
-            log("POKE 54277,9 (Attack/Decay envelope)");
-            sendSignal('CPU', 'SID', 'addr', 0);
-            sendSignal('CPU', 'SID', 'data', 200);
-        }, 800);
-
-        setTimeout(() => {
-            log("POKE 54273,34 (Frequency high byte)");
-            sendSignal('CPU', 'SID', 'addr', 0);
-            sendSignal('CPU', 'SID', 'data', 200);
-        }, 1400);
-
-        setTimeout(() => {
-            log("POKE 54276,17 (Gate on + Triangle wave)");
-            sendSignal('CPU', 'SID', 'addr', 0);
-            sendSignal('CPU', 'SID', 'data', 200);
-        }, 2000);
-
-        setTimeout(() => {
-            log("SID oscillator generates waveform.");
-            log("♪ ♫ Sound plays through audio output! ♫ ♪");
-        }, 2800);
+    sound: {
+        title: 'SID Sound Event',
+        steps: [
+            { at: 0, log: ['BASIC executes: POKE 54296,15 (volume max)'], send: [['CPU', 'SID', 'addr'], ['CPU', 'SID', 'data', 200]] },
+            { at: 800, log: ['POKE 54277,9 (attack/decay envelope)'], send: [['CPU', 'SID', 'addr'], ['CPU', 'SID', 'data', 200]] },
+            { at: 1400, log: ['POKE 54273,34 (frequency high byte)'], send: [['CPU', 'SID', 'addr'], ['CPU', 'SID', 'data', 200]] },
+            { at: 2000, log: ['POKE 54276,17 (gate on + triangle wave)'], send: [['CPU', 'SID', 'addr'], ['CPU', 'SID', 'data', 200]] },
+            { at: 2800, log: ['SID oscillator generates the waveform.', 'Sound plays through the audio output.'] }
+        ]
     }
 };
 
-// Start render loop
-render();
+// Called from the scenario buttons in hardware.html
+window.runScenario = function (name) {
+    const scenario = SCENARIOS[name];
+    if (!scenario) return;
+
+    cancelScenario();
+    clearLog();
+    startRender();
+    log(`--- Starting: ${scenario.title.toUpperCase()} ---`);
+
+    for (const step of scenario.steps) {
+        after(step.at, () => {
+            (step.log || []).forEach(log);
+            (step.send || []).forEach(([from, to, type, delay]) => sendSignal(from, to, type, delay));
+        });
+    }
+};
+
+// Draw the board immediately, then keep animating only while it is visible.
+startRender();
+new IntersectionObserver(([entry]) => {
+    if (entry.isIntersecting) {
+        startRender();
+    } else {
+        renderRunning = false;
+    }
+}).observe(canvas);

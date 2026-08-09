@@ -5,7 +5,7 @@
 #   deploy  - Deploy to Google App Engine
 #   run     - Run the local development server
 #   test    - Run all tests using pytest
-#   gen     - Generate cover sheets and update related scripts
+#   gen     - Generate favicons and social image from the source logo
 
 param(
     [Parameter(Position=0)]
@@ -14,7 +14,10 @@ param(
 
     # Deploy options
     [switch]$NoPromote,
-    [string]$Version = ""
+    [string]$Version = "",
+
+    # Format options: report badly formatted files instead of rewriting them
+    [switch]$Check
 )
 
 # Hard-pinned: this repo is the turbo8bit project. Never deploy
@@ -37,10 +40,10 @@ function Show-Help {
     Write-Host "  deploy         - Deploy to Google App Engine"
     Write-Host "  run            - Run the local development server"
     Write-Host "  test           - Run all tests using pytest"
-    Write-Host "  gen            - Generate cover sheets and update related scripts"
+    Write-Host "  gen            - Generate favicons and social image from the source logo"
     Write-Host "  crt            - Deploy CRT files to Cloud Storage"
     Write-Host "  format         - Format Python files with Black"
-    Write-Host "  format --check - Check formatting without changes"
+    Write-Host "  format -Check  - Report badly formatted files without changing them"
     Write-Host "  help           - Show this help message"
     Write-Host ""
     Write-Host "Deploy Options:" -ForegroundColor Green
@@ -75,7 +78,6 @@ function Get-VenvPython {
 
 function Invoke-Format {
     $VenvPython = Get-VenvPython
-    $checkOnly = $Args -contains "--check"
     
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -90,9 +92,14 @@ function Invoke-Format {
         & $VenvPython -m pip install black
     }
     
-    if ($checkOnly) {
+    if ($Check) {
         Write-Host "Checking Python formatting..." -ForegroundColor Yellow
         & $VenvPython -m black --check web/ tools/
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "Formatting check failed. Run '.\dd.ps1 format' to fix." -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
     } else {
         Write-Host "Formatting Python files..." -ForegroundColor Yellow
         & $VenvPython -m black web/ tools/
@@ -220,29 +227,15 @@ function Invoke-Run {
 
 function Invoke-Gen {
     Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  Generating Covers and Assets" -ForegroundColor Cyan
+    Write-Host "  Generating Icons" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $venvPath = Join-Path $ScriptRoot ".venv"
+    $VenvPython = Get-VenvPython
+    $genFavicons = Join-Path $ScriptRoot "tools\gen_favicons.py"
 
-    if (-not (Test-Path $venvPath)) {
-        Write-Host "Virtual environment not found." -ForegroundColor Yellow
-        Write-Host "Please run 'python -m venv .venv' and install requirements." -ForegroundColor Yellow
-        exit 1
-    }
-
-    # Activate venv
-    $activateScript = Join-Path $venvPath "Scripts\Activate.ps1"
-    . $activateScript
-
-    # Set PYTHONPATH
-    $env:PYTHONPATH = Join-Path $ScriptRoot "web"
-
-    $buildCovers = Join-Path $ScriptRoot "tools\build_covers.py"
-    
-    Write-Host "Running build_covers.py..." -ForegroundColor Yellow
-    python $buildCovers
+    Write-Host "Running gen_favicons.py..." -ForegroundColor Yellow
+    & $VenvPython $genFavicons
 
     if ($LASTEXITCODE -eq 0) {
         Write-Host ""

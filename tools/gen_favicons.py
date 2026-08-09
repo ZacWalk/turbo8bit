@@ -1,7 +1,9 @@
-"""Generate sized favicons and a social (Open Graph) image from web/static/favicon.png.
+"""Generate sized favicons and a social (Open Graph) image from raw-images/favicon.png.
 
-The source image's pixel (0,0) is treated as the canonical brand background color,
-so social images are padded with that color to produce a 1200x630 OG image.
+The source lives outside web/static so the full-resolution original is not part of
+the deployed bundle. The source image's pixel (0,0) is treated as the canonical
+brand background color, so social images are padded with that color to produce a
+1200x630 OG image.
 """
 
 from pathlib import Path
@@ -9,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "web" / "static" / "favicon.png"
+SRC = ROOT / "raw-images" / "favicon.png"
 OUT_DIR = ROOT / "web" / "static" / "icons"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 

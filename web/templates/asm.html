@@ -8,7 +8,10 @@
     <!-- Emulator Panel -->
     <div class="c64-emulator-column">
         <div class="c64-emulator-panel">
-            
+            <div class="panel-header">
+                <h2>C64 SCREEN</h2>
+            </div>
+
             <canvas id="screen" width="384" height="272"></canvas>
             
             <div class="c64-controls asm-controls">
@@ -50,10 +53,12 @@
     
     <!-- Assembly Editor Panel -->
     <div class="c64-editor-panel">
-        <div class="sample-selector">
-            <span class="sample-label">Load Assembly Sample:</span>
-            <select id="sampleSelect" onchange="loadSelectedSample()">
-            </select>
+        <div class="panel-header">
+            <h2>ASSEMBLY SOURCE</h2>
+            <div class="sample-selector">
+                <label class="sample-label" for="sampleSelect">Sample:</label>
+                <select id="sampleSelect" onchange="loadSelectedSample()"></select>
+            </div>
         </div>
         
         <div id="asm-editor"></div>
@@ -177,67 +182,14 @@ import { CodeEditor } from "{{ url_for('static', filename='js/emulator/editor.js
 import { Assembler, disassembleInstruction } from "{{ url_for('static', filename='js/emulator/assembler.js') }}";
 import { C64Debugger, DebuggerState } from "{{ url_for('static', filename='js/emulator/debugger.js') }}";
 import { FLAG_N, FLAG_V, FLAG_B, FLAG_D, FLAG_I, FLAG_Z, FLAG_C } from "{{ url_for('static', filename='js/emulator/mos6510.js') }}";
+import { ExampleLibrary } from "{{ url_for('static', filename='js/examples.js') }}";
 
-// Example metadata loaded from JSON
-let examplesIndex = {};
-let examplesByKey = {};
+const DEFAULT_EXAMPLE = 'hello';
 
-// Fetch and populate sample selector from JSON index
-async function initExamples() {
-    const response = await fetch("{{ url_for('static', filename='assembly/index.json') }}");
-    if (!response.ok) {
-        console.error(`Failed to load assembly examples index: HTTP ${response.status}`);
-        return;
-    }
-    const data = await response.json();
-    examplesIndex = data;
-    
-    // Build lookup by ID
-    for (const example of data.examples) {
-        examplesByKey[example.id] = example;
-    }
-    
-    // Populate dropdown grouped by category
-    const select = document.getElementById('sampleSelect');
-    const categories = {};
-    
-    for (const example of data.examples) {
-        if (!categories[example.category]) {
-            categories[example.category] = [];
-        }
-        categories[example.category].push(example);
-    }
-    
-    for (const [category, examples] of Object.entries(categories)) {
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = category;
-        for (const example of examples) {
-            const option = document.createElement('option');
-            option.value = example.id;
-            option.textContent = example.title;
-            optgroup.appendChild(option);
-        }
-        select.appendChild(optgroup);
-    }
-    
-    // Load default example
-    const defaultKey = 'hello';
-    const code = await loadExampleCode(defaultKey);
-    editor.setValue(code);
-    document.getElementById('sampleSelect').value = defaultKey;
-}
-
-// Load example code from file
-async function loadExampleCode(id) {
-    const example = examplesByKey[id];
-    if (!example) return '';
-    const response = await fetch("{{ url_for('static', filename='assembly/') }}" + example.file);
-    if (!response.ok) {
-        console.error(`Failed to load assembly example '${id}': HTTP ${response.status}`);
-        return '';
-    }
-    return await response.text();
-}
+const examples = new ExampleLibrary(
+    "{{ url_for('static', filename='assembly/index.json') }}",
+    "{{ url_for('static', filename='assembly/') }}"
+);
 
 // Initialize emulator
 const emulator = new C64Emulator('screen', { audioEnabled: false });
@@ -248,43 +200,42 @@ window.emulator = emulator;
 // Initialize assembler and debugger
 const assembler = new Assembler();
 const debugger_ = new C64Debugger(emulator.machine);
-debugger_.onStateChange = updateDebuggerUI;
-debugger_.onStep = onDebuggerStep;
 
-// Store the source map from assembly for line highlighting
+// Maps assembled addresses back to editor lines, for the debug highlight
 let currentSourceMap = null;
 
 // Initialize Assembly editor with integrated Run/Step/Stop buttons
 const editor = new CodeEditor('#asm-editor', {
     language: 'asm',
     fontSize: 13,
-    onRun: () => {
-        assembleAndRun();
-    },
-    onStep: () => {
-        debuggerStep();
-    },
-    onStop: () => {
-        debuggerStop();
-    }
+    onRun: () => assembleAndRun(),
+    onStep: () => debuggerStep(),
+    onStop: () => debuggerStop()
 });
-
-// Initialize examples after editor is ready
-initExamples();
 window.editor = editor;
+
+const sampleSelect = document.getElementById('sampleSelect');
+
+async function initExamples() {
+    try {
+        await examples.populate(sampleSelect);
+        sampleSelect.value = DEFAULT_EXAMPLE;
+        await loadSelectedSample();
+    } catch (e) {
+        console.error(e);
+        editor.setValue('; Could not load the sample programs.');
+    }
+}
+initExamples();
 
 // Load sample from dropdown
 async function loadSelectedSample() {
-    const select = document.getElementById('sampleSelect');
-    const id = select.value;
-    const example = examplesByKey[id];
-    if (example) {
-        const code = await loadExampleCode(id);
-        editor.setValue(code);
-        // Clear any existing debug state
-        editor.clearHighlight();
-        currentSourceMap = null;
-    }
+    const id = sampleSelect.value;
+    if (!examples.get(id)) return;
+    editor.setValue(await examples.source(id));
+    // Clear any existing debug state
+    editor.clearHighlight();
+    currentSourceMap = null;
 }
 window.loadSelectedSample = loadSelectedSample;
 
@@ -296,182 +247,132 @@ window.loadSelectedSample = loadSelectedSample;
 let isDebugMode = false;
 let initialSP = 0;  // Stack pointer when we started stepping (to detect RTS completion)
 
+// Non-empty when execution ended abnormally; shown instead of the disassembly.
+let statusMessage = '';
+
 // BASIC warm start address - where we return after user code finishes
 const BASIC_WARM_START = 0xA474;
 
-function assembleAndRun() {
-    const source = editor.getValue();
-    const result = assembler.assemble(source);
-    
+//
+// Assemble the editor contents, reporting errors to the user.
+// @returns {Object|null} The assembler result, or null if it did not assemble
+//
+function assembleEditor() {
+    const result = assembler.assemble(editor.getValue());
     if (!result.success) {
         alert('Assembly errors:\n' + result.errors.map(e => `Line ${e.lineNum}: ${e.message}`).join('\n'));
-        return;
+        return null;
     }
-    
-    // Store the source map for line highlighting
     currentSourceMap = result.sourceMap;
-    
-    // Not debug mode - just run
+    return result;
+}
+
+//
+// Load assembled code and set the CPU up as if BASIC had JSR'd into it, so a
+// final RTS hands control back to the READY prompt.
+//
+function loadAndEnter(result) {
+    emulator.machine.loadCode(result.bytes, result.startAddress);
+
+    const cpu = emulator.machine.cpu;
+    const returnAddr = BASIC_WARM_START - 1;  // RTS pops and adds 1
+    const push = (byte) => {
+        emulator.machine.ram[0x100 + cpu.SP] = byte;
+        cpu.SP = (cpu.SP - 1) & 0xff;
+    };
+    push((returnAddr >> 8) & 0xff);
+    push(returnAddr & 0xff);
+
+    cpu.PC = result.startAddress;
+    statusMessage = '';
+}
+
+function assembleAndRun() {
+    const result = assembleEditor();
+    if (!result) return;
+
     isDebugMode = false;
     editor.clearHighlight();
     debugger_.codeBytes = null;
-    
-    // Make sure emulator is running
     emulator.resume();
-    
-    // Load code into emulator RAM
-    emulator.machine.loadCode(result.bytes, result.startAddress);
-    
-    // Simulate JSR: push return address (BASIC warm start - 1) onto stack
-    // RTS will pop and add 1, returning to BASIC_WARM_START
-    const returnAddr = BASIC_WARM_START - 1;
-    const cpu = emulator.machine.cpu;
-    cpu.SP = (cpu.SP - 1) & 0xff;
-    emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = (returnAddr >> 8) & 0xff;  // high byte
-    cpu.SP = (cpu.SP - 1) & 0xff;
-    emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = returnAddr & 0xff;  // low byte
-    
-    // Set PC to start address - emulator will run at full speed
-    cpu.PC = result.startAddress;
-    
-    // Highlight Run button to show running state
+
+    loadAndEnter(result);
     updateButtonHighlight('run');
-    document.getElementById('sourceLine').textContent = '';
-    
-    console.log(`Running ${result.bytes.length} bytes at $${result.startAddress.toString(16).toUpperCase()}`);
 }
 window.assembleAndRun = assembleAndRun;
 
+//
+// Stop stepping if the CPU crashed or the program RTS'd back to BASIC.
+// @returns {boolean} True if execution has finished
+//
+function stepFinished() {
+    const cpu = emulator.machine.cpu;
+    if (cpu.halted) {
+        statusMessage = '*crash*';
+        debugger_.state = DebuggerState.HALTED;
+        updateButtonHighlight(null);
+        return true;
+    }
+    if (cpu.SP === initialSP) {
+        debuggerStop();
+        return true;
+    }
+    return false;
+}
+
 function debuggerStep() {
     const cpu = emulator.machine.cpu;
-    
-    // Check for crash (CPU halted)
+
     if (cpu.halted) {
+        statusMessage = '*crash*';
         updateButtonHighlight(null);
-        document.getElementById('sourceLine').textContent = '*crash*';
         return;
     }
-    
+
     // Enter debug mode - pause the emulator's main loop
     isDebugMode = true;
     emulator.pause();
-    
+
     if (!debugger_.codeBytes) {
-        // Assemble first if not done yet
-        const source = editor.getValue();
-        const result = assembler.assemble(source);
-        
-        if (!result.success) {
-            alert('Assembly errors:\n' + result.errors.map(e => `Line ${e.lineNum}: ${e.message}`).join('\n'));
-            return;
-        }
-        
-        // Store the source map for line highlighting
-        currentSourceMap = result.sourceMap;
-        
-        // Load code into emulator RAM for stepping
-        emulator.machine.loadCode(result.bytes, result.startAddress);
-        
-        // Remember initial SP to detect when RTS completes
-        initialSP = cpu.SP;
-        
-        // Simulate JSR: push return address onto stack
-        const returnAddr = BASIC_WARM_START - 1;
-        cpu.SP = (cpu.SP - 1) & 0xff;
-        emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = (returnAddr >> 8) & 0xff;
-        cpu.SP = (cpu.SP - 1) & 0xff;
-        emulator.machine.ram[0x100 + ((cpu.SP + 1) & 0xff)] = returnAddr & 0xff;
-        
-        cpu.PC = result.startAddress;
-        
-        // Set up debugger tracking
+        const result = assembleEditor();
+        if (!result) return;
+
+        initialSP = cpu.SP;  // Detect the closing RTS by watching for this level
+        loadAndEnter(result);
+
         debugger_.codeStart = result.startAddress;
         debugger_.codeEnd = result.startAddress + result.bytes.length;
         debugger_.codeBytes = result.bytes;
         debugger_.state = DebuggerState.PAUSED;
-        
-        // Show initial state before first step
-        updateLineHighlight();
+
         updateButtonHighlight('step');
         return;
     }
-    
-    // Check if current instruction is JSR (opcode 0x20)
-    const opcode = emulator.machine.ram[cpu.PC];
-    if (opcode === 0x20) {
-        // JSR - get target address (little-endian)
-        const targetAddr = emulator.machine.ram[cpu.PC + 1] | (emulator.machine.ram[cpu.PC + 2] << 8);
-        
-        // Check if target is within our code (step into) or external (step over)
-        if (targetAddr >= debugger_.codeStart && targetAddr < debugger_.codeEnd) {
-            // Step into - target is in user code, just execute the JSR
-            cpu.step();
-        } else {
-            // Step over - run until subroutine returns (SP returns to current level)
-            const preJsrSP = cpu.SP;
-            let maxCycles = 1000000;  // Safety limit
-            
-            do {
-                cpu.step();
-                maxCycles--;
-                
-                // Check for crash
-                if (cpu.halted) {
-                    updateButtonHighlight(null);
-                    document.getElementById('sourceLine').textContent = '*crash*';
-                    debugger_.state = DebuggerState.HALTED;
-                    return;
-                }
-                
-                // Check if main code finished (RTS back to BASIC)
-                if (cpu.SP === initialSP) {
-                    debuggerStop();
-                    return;
-                }
-            } while (cpu.SP !== preJsrSP && maxCycles > 0);
-            
-            if (maxCycles <= 0) {
-                updateButtonHighlight(null);
-                document.getElementById('sourceLine').textContent = '*timeout in subroutine*';
-                return;
-            }
-        }
-        
-        // Check for crash after stepping
-        if (cpu.halted) {
-            updateButtonHighlight(null);
-            document.getElementById('sourceLine').textContent = '*crash*';
-            debugger_.state = DebuggerState.HALTED;
-            return;
-        }
-        
-        // Check if RTS completed
-        if (cpu.SP === initialSP) {
-            debuggerStop();
-            return;
-        }
-    } else {
-        // Normal instruction - step one
+
+    const isJsr = emulator.machine.ram[cpu.PC] === 0x20;
+    const target = emulator.machine.ram[cpu.PC + 1] | (emulator.machine.ram[cpu.PC + 2] << 8);
+    const stepsInto = !isJsr
+        || (target >= debugger_.codeStart && target < debugger_.codeEnd);
+
+    if (stepsInto) {
         cpu.step();
-        
-        // Check for crash after stepping
-        if (cpu.halted) {
+        if (stepFinished()) return;
+    } else {
+        // Step over: run the KERNAL/BASIC routine until the stack unwinds.
+        const preJsrSP = cpu.SP;
+        let budget = 1000000;
+        do {
+            cpu.step();
+            if (stepFinished()) return;
+        } while (cpu.SP !== preJsrSP && --budget > 0);
+
+        if (budget <= 0) {
+            statusMessage = '*timeout in subroutine*';
             updateButtonHighlight(null);
-            document.getElementById('sourceLine').textContent = '*crash*';
-            debugger_.state = DebuggerState.HALTED;
-            return;
-        }
-        
-        // Check if RTS completed (SP returned to initial level, meaning we popped our return address)
-        if (cpu.SP === initialSP) {
-            // Code finished - return to normal emulation
-            debuggerStop();
             return;
         }
     }
-    
-    // Update the display
-    updateLineHighlight();
+
     updateButtonHighlight('step');
 }
 window.debuggerStep = debuggerStep;
@@ -487,16 +388,42 @@ function debuggerStop() {
     debugger_.codeBytes = null;
     debugger_.state = DebuggerState.STOPPED;
     initialSP = 0;
-    
+    statusMessage = '';
+
     editor.clearHighlight();
     updateButtonHighlight(null);
-    document.getElementById('sourceLine').textContent = '';
 }
 window.debuggerStop = debuggerStop;
 
 // ============================================================================
 // Debugger UI Updates
 // ============================================================================
+
+const regEls = {
+    PC: document.getElementById('regPC'),
+    A: document.getElementById('regA'),
+    X: document.getElementById('regX'),
+    Y: document.getElementById('regY'),
+    SP: document.getElementById('regSP')
+};
+
+const flagEls = [
+    [document.getElementById('flagN'), FLAG_N],
+    [document.getElementById('flagV'), FLAG_V],
+    [document.getElementById('flagB'), FLAG_B],
+    [document.getElementById('flagD'), FLAG_D],
+    [document.getElementById('flagI'), FLAG_I],
+    [document.getElementById('flagZ'), FLAG_Z],
+    [document.getElementById('flagC'), FLAG_C]
+];
+
+const sourceLineEl = document.getElementById('sourceLine');
+
+// Editor line currently marked as "executing", so the highlight (which also
+// scrolls) is only reapplied when it actually moves.
+let shownLine;
+
+const hex = (value, digits) => '$' + value.toString(16).toUpperCase().padStart(digits, '0');
 
 //
 // Highlight Run or Step button to show current mode
@@ -505,42 +432,9 @@ window.debuggerStop = debuggerStop;
 function updateButtonHighlight(mode) {
     const runBtn = document.querySelector('.run-btn');
     const stepBtn = document.querySelector('.step-btn');
-    
+
     if (runBtn) runBtn.classList.toggle('active', mode === 'run');
     if (stepBtn) stepBtn.classList.toggle('active', mode === 'step');
-}
-
-function updateDebuggerUI(state, cpuState) {
-    document.getElementById('regPC').textContent = '$' + cpuState.PC.toString(16).padStart(4, '0').toUpperCase();
-    document.getElementById('regA').textContent = '$' + cpuState.A.toString(16).padStart(2, '0').toUpperCase();
-    document.getElementById('regX').textContent = '$' + cpuState.X.toString(16).padStart(2, '0').toUpperCase();
-    document.getElementById('regY').textContent = '$' + cpuState.Y.toString(16).padStart(2, '0').toUpperCase();
-    document.getElementById('regSP').textContent = '$' + cpuState.SP.toString(16).padStart(2, '0').toUpperCase();
-    
-    const flags = cpuState.flags;
-    document.getElementById('flagN').classList.toggle('set', flags.N);
-    document.getElementById('flagV').classList.toggle('set', flags.V);
-    document.getElementById('flagB').classList.toggle('set', flags.B);
-    document.getElementById('flagD').classList.toggle('set', flags.D);
-    document.getElementById('flagI').classList.toggle('set', flags.I);
-    document.getElementById('flagZ').classList.toggle('set', flags.Z);
-    document.getElementById('flagC').classList.toggle('set', flags.C);
-    
-    // Update button highlight based on state
-    if (state === DebuggerState.RUNNING) {
-        updateButtonHighlight('run');
-    } else if (state === DebuggerState.PAUSED) {
-        updateButtonHighlight('step');
-    } else {
-        updateButtonHighlight(null);
-    }
-    
-    // Update line highlight based on PC
-    updateLineHighlight();
-}
-
-function onDebuggerStep(entry) {
-    updateLineHighlight();
 }
 
 //
@@ -548,66 +442,58 @@ function onDebuggerStep(entry) {
 // Returns null if PC is not in the source map
 //
 function getSourceLineForPC(pc) {
-    if (!currentSourceMap || currentSourceMap.length === 0) {
-        return null;
-    }
-    
-    // Find the source map entry that matches this PC
-    for (const entry of currentSourceMap) {
-        if (entry.address === pc) {
-            return entry.lineNum;
-        }
-    }
-    
-    return null;
+    if (!currentSourceMap) return null;
+    const entry = currentSourceMap.find(e => e.address === pc);
+    return entry ? entry.lineNum : null;
 }
 
 //
-// Update the editor line highlight and source line display
+// Mirror the live CPU into the register panel, the disassembly line and (while
+// stepping) the editor's highlighted line. This is the single place the
+// debugger UI is drawn from; everything else just changes the machine.
 //
-function updateLineHighlight() {
-    // Use emulator's actual CPU state (not debugger's internal CPU)
-    const pc = emulator.machine.cpu.PC;
-    const lineNum = getSourceLineForPC(pc);
-    
-    // Update editor highlight
-    if (lineNum !== null) {
-        editor.highlightLine(lineNum);
-    } else {
-        editor.clearHighlight();
-    }
-    
-    // Update source line display with disassembly of current PC instruction
-    const sourceLineElem = document.getElementById('sourceLine');
-    const instr = disassembleInstruction(emulator.machine.ram, pc);
-    const addr = '$' + pc.toString(16).padStart(4, '0').toUpperCase();
-    const bytes = instr.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-    sourceLineElem.textContent = `${addr}: ${bytes.padEnd(9)} ${instr.text}`;
-    
-    // Also update register display for real-time feedback
-    updateRegisterDisplay();
-}
-
-//
-// Update register display from emulator CPU
-//
-function updateRegisterDisplay() {
+function renderCpuState() {
     const cpu = emulator.machine.cpu;
-    document.getElementById('regPC').textContent = '$' + cpu.PC.toString(16).padStart(4, '0').toUpperCase();
-    document.getElementById('regA').textContent = '$' + cpu.A.toString(16).padStart(2, '0').toUpperCase();
-    document.getElementById('regX').textContent = '$' + cpu.X.toString(16).padStart(2, '0').toUpperCase();
-    document.getElementById('regY').textContent = '$' + cpu.Y.toString(16).padStart(2, '0').toUpperCase();
-    document.getElementById('regSP').textContent = '$' + cpu.SP.toString(16).padStart(2, '0').toUpperCase();
-    
-    // Extract flags from CPU's P register using bitmasks
-    const p = cpu.P;
-    document.getElementById('flagN').classList.toggle('set', !!(p & FLAG_N));
-    document.getElementById('flagV').classList.toggle('set', !!(p & FLAG_V));
-    document.getElementById('flagB').classList.toggle('set', !!(p & FLAG_B));
-    document.getElementById('flagD').classList.toggle('set', !!(p & FLAG_D));
-    document.getElementById('flagI').classList.toggle('set', !!(p & FLAG_I));
-    document.getElementById('flagZ').classList.toggle('set', !!(p & FLAG_Z));
-    document.getElementById('flagC').classList.toggle('set', !!(p & FLAG_C));
+
+    regEls.PC.textContent = hex(cpu.PC, 4);
+    regEls.A.textContent = hex(cpu.A, 2);
+    regEls.X.textContent = hex(cpu.X, 2);
+    regEls.Y.textContent = hex(cpu.Y, 2);
+    regEls.SP.textContent = hex(cpu.SP, 2);
+
+    for (const [el, mask] of flagEls) {
+        el.classList.toggle('set', !!(cpu.P & mask));
+    }
+
+    const instr = disassembleInstruction(emulator.machine.ram, cpu.PC);
+    const bytes = instr.bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+    sourceLineEl.textContent = statusMessage
+        || `${hex(cpu.PC, 4)}: ${bytes.padEnd(9)} ${instr.text}`;
+
+    // Only follow the PC in the editor while stepping; doing it during a
+    // full-speed run would scroll the source out from under the user.
+    if (isDebugMode) {
+        const lineNum = getSourceLineForPC(cpu.PC);
+        if (lineNum !== shownLine) {
+            shownLine = lineNum;
+            if (lineNum !== null) {
+                editor.highlightLine(lineNum);
+            } else {
+                editor.clearHighlight();
+            }
+        }
+    } else {
+        shownLine = undefined;
+    }
+}
+
+//
+// Redraw the debug panel while the page is visible. requestAnimationFrame
+// stops on its own in a background tab, unlike a timer.
+//
+function debugLoop() {
+    renderCpuState();
+    requestAnimationFrame(debugLoop);
 }
 
 // ============================================================================
@@ -657,61 +543,9 @@ document.addEventListener('keyup', e => {
 window.addEventListener('load', () => {
     document.body.tabIndex = 0;
     document.body.focus();
-    
-    // Initialize register display
-    updateDebuggerUI(DebuggerState.STOPPED, debugger_.getState());
-    
-    // Real-time register updates (poll every 100ms)
-    setInterval(() => {
-        // Update registers from the actual emulator CPU (not debugger)
-        const cpu = emulator.machine.cpu;
-        const cpuState = {
-            A: cpu.A,
-            X: cpu.X,
-            Y: cpu.Y,
-            SP: cpu.SP,
-            PC: cpu.PC,
-            flags: {
-                N: !!(cpu.P & 0x80),
-                V: !!(cpu.P & 0x40),
-                B: !!(cpu.P & 0x10),
-                D: !!(cpu.P & 0x08),
-                I: !!(cpu.P & 0x04),
-                Z: !!(cpu.P & 0x02),
-                C: !!(cpu.P & 0x01)
-            }
-        };
-        
-        // Update register display
-        document.getElementById('regPC').textContent = '$' + cpuState.PC.toString(16).padStart(4, '0').toUpperCase();
-        document.getElementById('regA').textContent = '$' + cpuState.A.toString(16).padStart(2, '0').toUpperCase();
-        document.getElementById('regX').textContent = '$' + cpuState.X.toString(16).padStart(2, '0').toUpperCase();
-        document.getElementById('regY').textContent = '$' + cpuState.Y.toString(16).padStart(2, '0').toUpperCase();
-        document.getElementById('regSP').textContent = '$' + cpuState.SP.toString(16).padStart(2, '0').toUpperCase();
-        
-        // Update flags
-        document.getElementById('flagN').classList.toggle('set', cpuState.flags.N);
-        document.getElementById('flagV').classList.toggle('set', cpuState.flags.V);
-        document.getElementById('flagB').classList.toggle('set', cpuState.flags.B);
-        document.getElementById('flagD').classList.toggle('set', cpuState.flags.D);
-        document.getElementById('flagI').classList.toggle('set', cpuState.flags.I);
-        document.getElementById('flagZ').classList.toggle('set', cpuState.flags.Z);
-        document.getElementById('flagC').classList.toggle('set', cpuState.flags.C);
-        
-        // Update instruction display
-        const instr = disassembleInstruction(emulator.machine.ram, cpuState.PC);
-        const addr = '$' + cpuState.PC.toString(16).padStart(4, '0').toUpperCase();
-        const bytes = instr.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-        document.getElementById('sourceLine').textContent = `${addr}: ${bytes.padEnd(9)} ${instr.text}`;
-        
-        // In debug mode, also update the editor line highlight
-        if (isDebugMode && currentSourceMap) {
-            const lineNum = getSourceLineForPC(cpuState.PC);
-            if (lineNum !== null) {
-                editor.highlightLine(lineNum);
-            }
-        }
-    }, 100);
+
+    updateButtonHighlight(null);
+    debugLoop();
 });
 </script>
 {% endblock %}

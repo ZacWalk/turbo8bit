@@ -198,8 +198,8 @@
                 
                 <!-- Player Controls -->
                 <div class="player-controls-horizontal">
-                    <button class="player-btn play-btn" id="btn-play" title="Play">▶ PLAY</button>
-                    <button class="player-btn" id="btn-restart" title="Restart Track">↺ RESTART</button>
+                    <button class="player-btn play-btn" id="btn-play" title="Play or stop the current track">▶ PLAY</button>
+                    <button class="player-btn" id="btn-restart" title="Play the current track from the beginning">↺ RESTART</button>
                 </div>
                 <div class="frame-counter" id="frame-counter">Frame: 0 | 0:00</div>
             </div>
@@ -265,6 +265,16 @@
     let player = null;
     let animationId = null;
     let isPlaying = false;
+
+    const PLAY_LABEL = '\u25b6 PLAY';
+    const STOP_LABEL = '\u25a0 STOP';
+
+    // Reflect playback state on the single play/stop button.
+    function setPlayButton(playing) {
+        const btn = document.getElementById('btn-play');
+        btn.textContent = playing ? STOP_LABEL : PLAY_LABEL;
+        btn.classList.toggle('playing', playing);
+    }
     
     // Register names for display (all 29 SID registers: $D400-$D41C)
     const registerNames = [
@@ -482,9 +492,7 @@
         if (isPlaying) {
             player.stop();
             isPlaying = false;
-            const btn = document.getElementById('btn-play');
-            btn.textContent = '\u25b6';
-            btn.classList.remove('playing');
+            setPlayButton(false);
             if (animationId) {
                 cancelAnimationFrame(animationId);
                 animationId = null;
@@ -533,11 +541,10 @@
     
     // Initialize player
     async function initPlayer() {
-        console.log('Initializing SIDPlayer...');
-        
-        // Ensure SIDPlayer is available (should be set by index.js)
+        // sid-player.js is a deferred module, so window.SIDPlayer is set by the
+        // time DOMContentLoaded fires.
         if (typeof SIDPlayer === 'undefined') {
-            console.error('SIDPlayer not available! Check that index.js loaded correctly.');
+            console.error('SIDPlayer not available; check that sid-player.js loaded.');
             return;
         }
         
@@ -573,8 +580,7 @@
             console.log('Stopping playback');
             player.stop();
             isPlaying = false;
-            btn.textContent = '▶';
-            btn.classList.remove('playing');
+            setPlayButton(false);
             if (animationId) {
                 cancelAnimationFrame(animationId);
             }
@@ -590,8 +596,7 @@
                 await player.play();
                 console.log('Playback started, isPlaying:', player.isPlaying);
                 isPlaying = true;
-                btn.textContent = '❚❚';
-                btn.classList.add('playing');
+                setPlayButton(true);
                 updateVisualization();
             } catch (e) {
                 console.error('Playback failed:', e);
@@ -604,12 +609,15 @@
         }
     }
     
-    // Restart current track from beginning
-    function restartTrack() {
+    // Restart current track from the beginning, playing it if it was stopped
+    async function restartTrack() {
         if (!player) return;
         const state = player.getState();
         player.changeTrack(state.currentSong - 1);
         updateTrackSelector();
+        if (!isPlaying) {
+            await togglePlay();
+        }
     }
     
     // Initialize when player module is ready
@@ -624,16 +632,7 @@
         document.querySelector('.sid-selector-horizontal').addEventListener('click', onSidButtonClick);
     }
     
-    // Wait for both DOM and module to be ready
-    document.addEventListener('DOMContentLoaded', function() {
-        if (window.SIDPlayer) {
-            // Module already loaded
-            onPlayerReady();
-        } else {
-            // Wait for module to load
-            window.addEventListener('sidplayer-ready', onPlayerReady);
-        }
-    });
+    document.addEventListener('DOMContentLoaded', onPlayerReady);
 })();
 </script>
 

@@ -101,11 +101,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.addEventListener('click', () => {
                 const bit = btn.dataset.bit;
                 state[bit] = !state[bit];
-                btn.classList.toggle('active', state[bit]);
-                const valueEl = btn.querySelector(':not(.bit-name)');
-                if (valueEl) {
-                    valueEl.textContent = state[bit] ? '1' : '0';
-                }
+                updateBitButtons();
                 clearActivePreset();
                 updateMemoryMap();
             });
