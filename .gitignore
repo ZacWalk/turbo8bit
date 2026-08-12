@@ -3,6 +3,8 @@
 .env.*
 *.key
 *.pem
+# App Engine env vars, pulled into app.yaml via `includes:`
+web/secrets.yaml
 
 # Python virtual environments
 .venv/

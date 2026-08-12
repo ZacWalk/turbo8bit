@@ -143,6 +143,20 @@ function Invoke-Deploy {
             Write-Host "Note: gcloud active project is '$current'; this deploy will use '--project=$TARGET_PROJECT' regardless." -ForegroundColor Yellow
         }
 
+        # app.yaml pulls env vars in from secrets.yaml. Without it the deploy
+        # "succeeds" but every request 502s, because main.py refuses to start
+        # in production without SECRET_KEY.
+        if (-not (Test-Path "secrets.yaml")) {
+            Write-Host "[FAIL] web/secrets.yaml is missing." -ForegroundColor Red
+            Write-Host "       Copy web/secrets.example.yaml to web/secrets.yaml and fill it in." -ForegroundColor Yellow
+            exit 1
+        }
+        if ((Get-Content "secrets.yaml" -Raw) -match 'replace-me') {
+            Write-Host "[FAIL] web/secrets.yaml still contains the placeholder SECRET_KEY." -ForegroundColor Red
+            Write-Host "       Generate one with: python -c `"import secrets; print(secrets.token_urlsafe(48))`"" -ForegroundColor Yellow
+            exit 1
+        }
+
         Write-Host "Project: $TARGET_PROJECT" -ForegroundColor Yellow
         Write-Host "Directory: $webDir" -ForegroundColor Yellow
         Write-Host ""
@@ -171,6 +185,10 @@ function Invoke-Deploy {
             Write-Host "========================================" -ForegroundColor Green
             Write-Host ""
             Write-Host "View at: https://$TARGET_PROJECT.appspot.com" -ForegroundColor Cyan
+
+            if (-not $NoPromote) {
+                Test-Deployment
+            }
         } else {
             Write-Host ""
             Write-Host "Deployment failed with exit code: $LASTEXITCODE" -ForegroundColor Red
@@ -180,6 +198,46 @@ function Invoke-Deploy {
     finally {
         Pop-Location
     }
+}
+
+#
+# A deploy can report success while the app fails to boot (gunicorn exits, every
+# request 502s). Fetch each public page so that shows up here, not in a bug report.
+#
+function Test-Deployment {
+    Write-Host ""
+    Write-Host "Verifying deployment..." -ForegroundColor Yellow
+
+    $base = "https://$TARGET_PROJECT.appspot.com"
+    $paths = @("/", "/asm", "/hardware", "/memmap", "/sid", "/about", "/robots.txt", "/sitemap.xml")
+    $failed = @()
+
+    foreach ($path in $paths) {
+        try {
+            $response = Invoke-WebRequest -Uri "$base$path" -Method Get -TimeoutSec 30 -MaximumRedirection 5
+            $code = $response.StatusCode
+        } catch {
+            $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        }
+
+        if ($code -eq 200) {
+            Write-Host "  [ OK ] $code  $path" -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] $code  $path" -ForegroundColor Red
+            $failed += $path
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Host ""
+        Write-Host "$($failed.Count) of $($paths.Count) pages did not return 200." -ForegroundColor Red
+        Write-Host "Check the startup logs with:" -ForegroundColor Yellow
+        Write-Host "  gcloud app logs read --project=$TARGET_PROJECT --limit=50" -ForegroundColor Yellow
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "All $($paths.Count) pages returned 200." -ForegroundColor Green
 }
 
 function Invoke-Run {

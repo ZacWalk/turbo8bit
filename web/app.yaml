@@ -1,13 +1,11 @@
 runtime: python310
 entrypoint: gunicorn -b :$PORT main:app
 
-env_variables:
-  # Set your Google OAuth2 Client ID from Google Cloud Console
-  # GOOGLE_CLIENT_ID: "your-client-id.apps.googleusercontent.com"
-  # Comma-separated list of admin email addresses
-  # ADMIN_EMAILS: "admin@example.com"
-  # Secret key for Flask sessions (generate a secure random string)
-  # SECRET_KEY: "your-secret-key-here"
+# Secrets live in web/secrets.yaml, which is git-ignored so they are never
+# committed. Copy secrets.example.yaml to secrets.yaml and fill it in; the
+# deploy will refuse to run without it. See README.md.
+includes:
+  - secrets.yaml
 
 handlers:
 # Immutable media: safe to cache for a long time.
