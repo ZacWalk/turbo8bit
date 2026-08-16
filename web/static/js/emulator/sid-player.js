@@ -31,7 +31,7 @@
 
 import { ChipModel, SamplingMethod } from './sid.js';
 import { C64Machine, CLOCK_PAL, CLOCK_NTSC } from './machine.js';
-import { generatePsidDriver, DRIVER_ADDRESS } from './psid-driver.js';
+import { generatePsidDriver } from './psid-driver.js';
 
 // Re-export clock constants from machine.js for backward compatibility
 // (Consumers should import from machine.js directly)
@@ -190,9 +190,6 @@ function installDriver(machine, tune, song) {
     machine.cpu.SP = driver.cpuState.SP;
     machine.cpu.P = driver.cpuState.P;
     machine.cpu.halted = false;
-
-    console.log(`SID Player: PSID driver installed at $${DRIVER_ADDRESS.toString(16)}`);
-    console.log(`  Init: $${driver.debug.initAddr.toString(16)}, Play: $${driver.debug.playAddr.toString(16)}`);
 }
 
 //
@@ -211,10 +208,6 @@ export function loadSidTune(machine, buffer, song = null) {
 
     // Use the specified song or the file's default
     const songNumber = song !== null ? song : tune.startSong;
-
-    console.log(`loadSidTune: Loading "${tune.name}" by ${tune.author}`);
-    console.log(`  Load: $${tune.loadAddress.toString(16)}, Init: $${tune.initAddress.toString(16)}, Play: $${tune.playAddress.toString(16)}`);
-    console.log(`  Songs: ${tune.songs}, Playing: ${songNumber}`);
 
     // Reset the machine
     machine.reset();
@@ -368,13 +361,11 @@ export class SIDPlayer {
     // @returns {Promise<Object>} Parsed SID file info
     //
     async load(url) {
-        console.log('SIDPlayer.load:', url);
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`Failed to load: ${response.statusText}`);
         }
         const buffer = await response.arrayBuffer();
-        console.log('SIDPlayer.load: got', buffer.byteLength, 'bytes');
         return this.loadData(buffer);
     }
 
@@ -384,7 +375,6 @@ export class SIDPlayer {
     // @returns {Object} Parsed SID file info
     //
     loadData(buffer) {
-        console.log('SIDPlayer.loadData:', buffer.byteLength, 'bytes');
         // Create C64 machine
         this.machine = new C64Machine({ sampleRate: this.sampleRate });
 
@@ -393,7 +383,6 @@ export class SIDPlayer {
 
         // Load the tune
         this.sidFile = loadSidTune(this.machine, buffer);
-        console.log('SIDPlayer.loadData: loaded tune:', this.sidFile?.name);
 
         // Initialize timing
         const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
@@ -406,18 +395,7 @@ export class SIDPlayer {
         this.currentSong = this.sidFile.startSong - 1;
 
         // Run a few frames to initialize the tune
-        this.machine.traceEnabled = true;
-        this.machine.traceCount = 0;
         this.runInitFrames(10);
-
-        // DEBUG: Force a write to verify interception
-        console.log('SIDPlayer: Testing SID write interception...');
-        this.machine.write(0xD400, 0xAA);
-        if (this.registers[0] === 0xAA) {
-            console.log('SIDPlayer: Interception WORKS! Register $00 captured 0xAA');
-        } else {
-            console.error('SIDPlayer: Interception FAILED! Register $00 is 0x' + this.registers[0].toString(16));
-        }
 
         return this.sidFile;
     }
@@ -452,14 +430,10 @@ export class SIDPlayer {
     setupSIDInterception() {
         if (!this.machine) return;
 
-        console.log('SIDPlayer: Setting up SID interception');
         const self = this;
         const originalWrite = this.machine.sid.write.bind(this.machine.sid);
 
         this.machine.sid.write = function (offset, value, cycle) {
-            // Capture register for visualization (commented out spam log)
-            // console.log(`SID Write: $${(0xD400 + offset).toString(16)} = $${value.toString(16)}`);
-
             // Capture register for visualization
             self.registers[offset & 0x1f] = value;
 
@@ -517,41 +491,28 @@ export class SIDPlayer {
     // @private
     //
     generateSamples(buffer) {
-        if (!this.isPlaying) {
-            // Log only once per second
-            if (!this._silenceLogged || Date.now() - this._silenceLogged > 1000) {
-                console.log('generateSamples: not playing, isPlaying=', this.isPlaying, 'sidFile=', !!this.sidFile, 'machine=', !!this.machine);
-                this._silenceLogged = Date.now();
-            }
+        if (!this.isPlaying || !this.sidFile || !this.machine) {
             buffer.fill(0);
             return;
         }
-        if (!this.sidFile || !this.machine) {
-            console.log('generateSamples: missing sidFile or machine');
-            buffer.fill(0);
-            return;
-        }
+
+        const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
 
         // Safety check: ensure timing is initialized
         if (this.samplesPerFrame <= 0) {
-            const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
             this.samplesPerFrame = this.sampleRate / irqFreq;
             this.samplesToNextFrame = this.samplesPerFrame;
-            console.log(`generateSamples: initialized timing, samplesPerFrame=${this.samplesPerFrame}`);
         }
-
-        // Log first few calls to track initialization
-        if (!this._generateCount) this._generateCount = 0;
-        this._generateCount++;
-        const shouldLog = this._generateCount <= 3;
 
         const cyclesPerSample = this.machine.clockFrequency / this.sampleRate;
         let bufferOffset = 0;
-        let framesRun = 0;
-        // Pre-allocate a reasonably sized temp buffer for Int16 samples from SID
-        // This will be reused for each iteration to avoid allocation overhead
+
+        // Scratch buffer for the SID's Int16 output, reused across callbacks.
         const maxSamplesPerIteration = Math.ceil(this.samplesPerFrame) + 1;
-        const tempSamples = new Int16Array(maxSamplesPerIteration);
+        if (!this._tempSamples || this._tempSamples.length < maxSamplesPerIteration) {
+            this._tempSamples = new Int16Array(maxSamplesPerIteration);
+        }
+        const tempSamples = this._tempSamples;
 
         while (bufferOffset < buffer.length) {
             // Time to run a new frame?
@@ -560,9 +521,7 @@ export class SIDPlayer {
                 // Note: runFrame() calls sid.beginFrame() internally when audioEnabled is true
                 this.machine.runFrame();
                 this._frameCount++;
-                framesRun++;
 
-                const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
                 this.samplesToNextFrame += this.sampleRate / irqFreq;
 
                 if (this.onFrameUpdate) {
@@ -572,7 +531,7 @@ export class SIDPlayer {
 
             const samplesUntilFrame = Math.ceil(this.samplesToNextFrame);
             const samplesNeeded = buffer.length - bufferOffset;
-            const samplesToProcess = Math.min(samplesUntilFrame, samplesNeeded);
+            const samplesToProcess = Math.min(samplesUntilFrame, samplesNeeded, tempSamples.length - 1);
 
             if (samplesToProcess <= 0) {
                 this.samplesToNextFrame = 0;
@@ -589,11 +548,6 @@ export class SIDPlayer {
 
             this.samplesToNextFrame -= generated || samplesToProcess;
         }
-
-        // Log first few calls
-        if (shouldLog) {
-            console.log(`generateSamples #${this._generateCount}: framesRun=${framesRun}, bufferFilled=${bufferOffset}, totalFrames=${this._frameCount}, cpuPC=0x${this.machine.cpu.PC.toString(16)}, cpuHalted=${this.machine.cpu.halted}`);
-        }
     }
 
     //
@@ -601,34 +555,23 @@ export class SIDPlayer {
     // @returns {Promise<void>}
     //
     async play() {
-        console.log('SIDPlayer.play called, sidFile=', !!this.sidFile);
         if (!this.sidFile) {
-            console.error('No SID file loaded');
+            console.error('SIDPlayer: no SID file loaded');
             return;
         }
 
-        // Reset trace for playback
-        if (this.machine) {
-            this.machine.traceEnabled = true;
-            this.machine.traceCount = 0;
-        }
-
         if (!this.audioContext) {
-            console.log('SIDPlayer.play: creating AudioContext');
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: this.sampleRate
             });
         }
 
         if (this.audioContext.state === 'suspended') {
-            console.log('SIDPlayer.play: resuming AudioContext');
             await this.audioContext.resume();
         }
-        console.log('SIDPlayer.play: AudioContext state=', this.audioContext.state);
 
         // Handle sample rate change
         if (this.audioContext.sampleRate !== this.sampleRate) {
-            console.log(`SIDPlayer: Updating sample rate from ${this.sampleRate} to ${this.audioContext.sampleRate}`);
             this.sampleRate = this.audioContext.sampleRate;
 
             const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
@@ -647,11 +590,9 @@ export class SIDPlayer {
         // Try AudioWorklet first
         if (this.audioContext.audioWorklet) {
             try {
-                console.log('SIDPlayer.play: trying AudioWorklet');
                 // Set isPlaying BEFORE setup to avoid race condition
                 this.isPlaying = true;
                 await this.setupAudioWorklet();
-                console.log('SIDPlayer.play: AudioWorklet set up, isPlaying=true');
                 return;
             } catch (e) {
                 this.isPlaying = false;  // Reset on failure
@@ -660,12 +601,10 @@ export class SIDPlayer {
         }
 
         // Fallback to ScriptProcessor
-        console.log('SIDPlayer.play: using ScriptProcessor');
         // Set isPlaying BEFORE setupScriptProcessor() to avoid race condition
         // where onaudioprocess fires before isPlaying is set
         this.isPlaying = true;
         this.setupScriptProcessor();
-        console.log('SIDPlayer.play: ScriptProcessor set up, isPlaying=true');
     }
 
     //
@@ -696,15 +635,8 @@ export class SIDPlayer {
             }
         };
 
-        // Log driver state before sending first samples
-        console.log('SIDPlayer: Worklet setup, checking driver state...');
-        console.log(`  machine.ram[0x01] = 0x${this.machine.ram[0x01].toString(16)}`);
-        console.log(`  IRQ vector = 0x${(this.machine.ram[0xFFFE] | (this.machine.ram[0xFFFF] << 8)).toString(16)}`);
-        console.log(`  CPU PC = 0x${this.machine.cpu.PC.toString(16)}, halted = ${this.machine.cpu.halted}`);
-
         this.sendSamplesToWorklet();
         this.useWorklet = true;
-        console.log('SIDPlayer: Using AudioWorklet for playback');
     }
 
     //
@@ -712,38 +644,17 @@ export class SIDPlayer {
     // @private
     //
     sendSamplesToWorklet() {
-        if (!this.workletNode || !this.isPlaying) {
-            console.log('sendSamplesToWorklet: skipped, workletNode=', !!this.workletNode, 'isPlaying=', this.isPlaying);
-            return;
-        }
-
-        // Track sample sending
-        if (!this._workletSendCount) this._workletSendCount = 0;
-        this._workletSendCount++;
+        if (!this.workletNode || !this.isPlaying) return;
 
         this.generateSamples(this.workletSamples);
 
-        // Check if we're generating actual audio
-        let min = 0, max = 0, nonZero = 0;
-        for (let i = 0; i < this.workletSamples.length; i++) {
-            const s = this.workletSamples[i];
-            if (s < min) min = s;
-            if (s > max) max = s;
-            if (s !== 0) nonZero++;
-        }
-
-        if (this._workletSendCount <= 5 || this._workletSendCount % 50 === 0) {
-            console.log(`sendSamplesToWorklet #${this._workletSendCount}: nonZero=${nonZero}, min=${min.toFixed(4)}, max=${max.toFixed(4)}, frameCount=${this._frameCount}`);
-        }
-
+        // slice() copies, so it is the copy that gets neutered by the transfer
+        // and this.workletSamples stays usable for the next block.
         const buffer = this.workletSamples.buffer.slice(0);
         this.workletNode.port.postMessage(
             { type: 'samples', buffer: buffer },
             [buffer]
         );
-
-        // Reallocate the Float32Array since we transferred the buffer
-        this.workletSamples = new Float32Array(this.workletBufferSize);
     }
 
     //
@@ -761,7 +672,6 @@ export class SIDPlayer {
 
         this.scriptNode.connect(this.audioContext.destination);
         this.useWorklet = false;
-        console.log('SIDPlayer: Using ScriptProcessor for playback');
     }
 
     //
@@ -931,5 +841,4 @@ if (typeof window !== 'undefined') {
     if (typeof CustomEvent !== 'undefined') {
         window.dispatchEvent(new CustomEvent('sidplayer-ready'));
     }
-    console.log('SID Player loaded (C64Machine-based)');
 }

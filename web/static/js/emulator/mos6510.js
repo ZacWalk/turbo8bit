@@ -186,10 +186,6 @@ export class MOS6510 {
         // Fetch opcode
         const opcode = this.read(this.PC++);
 
-        if (window.debugCPU) {
-            console.log(`Step PC=${(this.PC - 1).toString(16)} Op=${opcode.toString(16)}`);
-        }
-
         // Execute instruction
         this.executeOpcode(opcode);
 
@@ -479,6 +475,70 @@ export class MOS6510 {
             case 0x80: case 0x82: case 0x89: case 0xc2: case 0xe2:
                 this.PC++; this.cycles += 2; break;
 
+            // Undocumented ANC (AND #imm, then copy bit 7 into carry)
+            case 0x0b: case 0x2b: {
+                this.A = this.setNZ(this.A & this.read(this.addrImmediate()));
+                this.P = (this.P & ~FLAG_C) | ((this.A >> 7) & FLAG_C);
+                this.cycles += 2;
+                break;
+            }
+
+            // Undocumented ALR/ASR (AND #imm, then LSR A)
+            case 0x4b: {
+                const v = this.A & this.read(this.addrImmediate());
+                this.P = (this.P & ~FLAG_C) | (v & FLAG_C);
+                this.A = this.setNZ(v >> 1);
+                this.cycles += 2;
+                break;
+            }
+
+            // Undocumented ARR (AND #imm, then ROR A with unusual C/V behaviour)
+            case 0x6b: {
+                const v = this.A & this.read(this.addrImmediate());
+                const carryIn = (this.P & FLAG_C) ? 0x80 : 0;
+                this.A = this.setNZ((v >> 1) | carryIn);
+                this.P &= ~(FLAG_C | FLAG_V);
+                if (this.A & 0x40) this.P |= FLAG_C;
+                if (((this.A >> 6) ^ (this.A >> 5)) & 0x01) this.P |= FLAG_V;
+                this.cycles += 2;
+                break;
+            }
+
+            // Undocumented LXA/ATX (A & #imm -> A and X; magic constant is 0xEE on most chips)
+            case 0xab: {
+                const v = (this.A | 0xee) & this.read(this.addrImmediate());
+                this.A = this.X = this.setNZ(v);
+                this.cycles += 2;
+                break;
+            }
+
+            // Undocumented ANE/XAA ((A | magic) & X & #imm -> A). Unstable on
+            // real hardware; 0xEE is the constant most NMOS chips settle on.
+            case 0x8b: {
+                const v = (this.A | 0xee) & this.X & this.read(this.addrImmediate());
+                this.A = this.setNZ(v);
+                this.cycles += 2;
+                break;
+            }
+
+            // Undocumented LAS (memory & SP -> A, X and SP)
+            case 0xbb: {
+                const v = this.read(this.addrAbsoluteY()) & this.SP;
+                this.A = this.X = this.SP = this.setNZ(v);
+                break;
+            }
+
+            // Undocumented SBX/AXS ((A & X) - #imm -> X, without borrow)
+            case 0xcb: {
+                const v = this.read(this.addrImmediate());
+                const result = (this.A & this.X) - v;
+                this.P &= ~FLAG_C;
+                if (result >= 0) this.P |= FLAG_C;
+                this.X = this.setNZ(result & 0xff);
+                this.cycles += 2;
+                break;
+            }
+
             // Undocumented LAX (LDA + LDX)
             case 0xa3: { const v = this.read(this.addrIndirectX()); this.A = this.X = this.setNZ(v); this.cycles += 6; break; }
             case 0xa7: { const v = this.read(this.addrZeroPage()); this.A = this.X = this.setNZ(v); this.cycles += 3; break; }
@@ -757,12 +817,19 @@ export class MOS6510 {
         const carry = (this.P & FLAG_C) ? 1 : 0;
 
         if (this.P & FLAG_D) {
-            // Decimal mode
+            // Decimal mode. On the NMOS 6502 Z comes from the binary sum, while
+            // N and V come from the (BCD-fixed) high nibble.
+            const binary = (this.A + value + carry) & 0xff;
             let lo = (this.A & 0x0f) + (value & 0x0f) + carry;
             let hi = (this.A >> 4) + (value >> 4);
             if (lo > 9) { lo -= 10; hi++; }
-            if (hi > 9) { hi -= 10; this.P |= FLAG_C; } else { this.P &= ~FLAG_C; }
-            // Fix: Do not update N, V, Z flags in decimal mode (NMOS 6502 behavior)
+
+            this.P &= ~(FLAG_N | FLAG_V | FLAG_Z | FLAG_C);
+            if (binary === 0) this.P |= FLAG_Z;
+            if ((hi << 4) & 0x80) this.P |= FLAG_N;
+            if (~(this.A ^ value) & (this.A ^ (hi << 4)) & 0x80) this.P |= FLAG_V;
+
+            if (hi > 9) { hi -= 10; this.P |= FLAG_C; }
             this.A = ((hi << 4) | (lo & 0x0f)) & 0xff;
         } else {
             const result = this.A + value + carry;
@@ -778,12 +845,18 @@ export class MOS6510 {
         const carry = (this.P & FLAG_C) ? 0 : 1;
 
         if (this.P & FLAG_D) {
-            // Decimal mode
+            // Decimal mode. N, V, Z and C are all set exactly as in binary mode;
+            // only the stored result is BCD-adjusted.
+            const binary = this.A - value - carry;
+            this.P &= ~(FLAG_C | FLAG_V);
+            if (binary >= 0) this.P |= FLAG_C;
+            if ((this.A ^ value) & (this.A ^ binary) & 0x80) this.P |= FLAG_V;
+            this.setNZ(binary & 0xff);
+
             let lo = (this.A & 0x0f) - (value & 0x0f) - carry;
             let hi = (this.A >> 4) - (value >> 4);
             if (lo < 0) { lo += 10; hi--; }
-            if (hi < 0) { hi += 10; this.P &= ~FLAG_C; } else { this.P |= FLAG_C; }
-            // Fix: Do not update N, V, Z flags in decimal mode (NMOS 6502 behavior)
+            if (hi < 0) { hi += 10; }
             this.A = ((hi << 4) | (lo & 0x0f)) & 0xff;
         } else {
             const result = this.A - value - carry;

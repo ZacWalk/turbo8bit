@@ -3967,3 +3967,39 @@ body {
         justify-content: center;
     }
 }
+
+/* ======================================
+   ACCESSIBILITY
+   ====================================== */
+
+/* Site-wide keyboard focus ring. :focus-visible keeps it off mouse clicks.
+   Scoped to canvas rather than [tabindex] because index/asm put tabindex on
+   <body>, which would otherwise draw an outline around the whole page. */
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+canvas[tabindex]:focus-visible {
+    outline: 2px solid var(--c64-yellow);
+    outline-offset: 2px;
+}
+
+/* The C64 screen is the keyboard target on / and /asm, so make it obvious
+   when keystrokes are going to the emulated machine. */
+#screen:focus-visible {
+    outline: 2px solid var(--c64-yellow);
+    outline-offset: 4px;
+    box-shadow: 0 0 24px rgba(201, 212, 135, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

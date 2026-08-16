@@ -101,8 +101,9 @@ export class C64Machine {
             this.sampleRate
         );
 
-        // I/O state
-        this.stopKeyPressed = false;
+        // Keyboard matrix: 8 rows (CIA1 port A) x 8 columns (CIA1 port B).
+        // Bits are active LOW, so 0xFF means "no key held in this row".
+        this.keyboardMatrix = new Uint8Array(8).fill(0xFF);
 
         // CIA1 Timer state (controls system IRQ at ~60Hz)
         this.cia1 = {
@@ -172,6 +173,7 @@ export class C64Machine {
         // Audio state
         this.audioEnabled = options.audioEnabled !== false;
         this.cycleAccumulator = 0;
+        this.audioSamplesGenerated = 0;
 
         // Frame timing
         this.cyclesPerFrame = options.cyclesPerFrame || CYCLES_PER_FRAME;
@@ -207,6 +209,7 @@ export class C64Machine {
     reset() {
         this.ram.fill(0);
         this.sid.reset();
+        this.keyboardMatrix.fill(0xFF);
 
         // Reset CIA1 timer state
         this.cia1.timerALatch = 0x4025;
@@ -243,8 +246,6 @@ export class C64Machine {
         this.vic.irqStatus = 0;
         this.vic.lastRasterLine = -1;
         this.vic.rasterCycle = 0;
-
-        console.log('Machine reset - clearing RAM and resetting CPU');
 
         // Initialize important C64 memory locations
         // Set up some basic system vectors and initial values
@@ -310,8 +311,6 @@ export class C64Machine {
 
         // Reset CPU (reads reset vector from ROM or cartridge)
         this.cpu.reset();
-
-        console.log(`CPU PC set to: 0x${this.cpu.PC.toString(16).padStart(4, '0')}`);
     }
 
     //
@@ -328,11 +327,6 @@ export class C64Machine {
         this.cartridge = cartridge;
         this.cartExrom = cartridge.exrom === 1;
         this.cartGame = cartridge.game === 1;
-
-        console.log(`Cartridge loaded: ${cartridge.name}`);
-        console.log(`  Type: ${cartridge.getInfo().typeName}`);
-        console.log(`  Banks: ${cartridge.banks.length}`);
-        console.log(`  Size: ${cartridge.getInfo().totalSize} bytes`);
 
         // Reset machine with cartridge installed
         this.reset();
@@ -352,7 +346,6 @@ export class C64Machine {
         this.cartRomL = null;
         this.cartRomH = null;
 
-        console.log('Cartridge ejected');
         this.reset();
     }
 
@@ -489,6 +482,52 @@ export class C64Machine {
     }
 
     //
+    // Read a byte the way the CPU would see it, but without side effects.
+    //
+    // Use this for anything that inspects memory for display - disassembly, hex
+    // dumps, step-over detection. A real read clears the sprite collision
+    // latches and the CIA interrupt registers, and can bank-switch a cartridge,
+    // so showing memory to the user must not go through read().
+    //
+    peek(addr) {
+        addr = addr & 0xFFFF;
+        const type = this.readMap[addr >> 8];
+
+        if (type === 1) return rom_basic[addr & 0x1FFF];
+        if (type === 2) return rom_kernal[addr & 0x1FFF];
+        if (type === 3) return rom_chars[addr & 0x0FFF];
+
+        if (type === 4) {  // I/O: report the latched register contents
+            if (addr < 0xD400) {
+                // The raster counter is live rather than latched
+                if (addr === 0xD012) return ((this.vic.rasterCycle / CYCLES_PER_RASTER_LINE) | 0) & 0xFF;
+                return this.ram[addr];
+            }
+            if (addr < 0xD800) return this.sid.busValue;
+            if (addr < 0xDC00) return this.ram[addr] & 0x0F;  // Color RAM
+            return this.ram[addr];
+        }
+
+        if (type === 5) {
+            if (this.cartridge && this.cartridge.enabled) {
+                const cartByte = this.cartridge.read(addr);
+                if (cartByte !== null) return cartByte;
+            }
+            return this.cartRomL ? this.cartRomL[addr & 0x1FFF] : this.ram[addr];
+        }
+
+        if (type === 6) {
+            if (this.cartridge && this.cartridge.enabled) {
+                const cartByte = this.cartridge.read(addr);
+                if (cartByte !== null) return cartByte;
+            }
+            return this.cartRomH ? this.cartRomH[addr & 0x1FFF] : this.ram[addr];
+        }
+
+        return this.ram[addr];
+    }
+
+    //
     // Write a byte to memory (Bus interface)
     // Implements C64 memory banking and I/O mapping
     //
@@ -610,6 +649,13 @@ export class C64Machine {
             case 0xD01A:
                 // Interrupt enable register
                 return this.vic.irqEnable;
+            case 0xD01E:
+            case 0xD01F: {
+                // Sprite-sprite / sprite-background collision latches clear on read
+                const collisions = this.ram[addr];
+                this.ram[addr] = 0;
+                return collisions;
+            }
             default:
                 return this.ram[addr];
         }
@@ -623,22 +669,38 @@ export class C64Machine {
         const reg = addr & 0x0F;
 
         switch (reg) {
-            case 0x00: // Port A - Keyboard row select / Joystick 2
-                // When reading, return joystick 2 state ANDed with keyboard row select
-                // Games typically write to PRA to select keyboard rows, then read PRB
-                return this.joystick2 & (this.ram[0xDC00] | 0x00);
+            case 0x00: {
+                // Port A - keyboard row select (output) / Joystick 2 (input).
+                // Pins configured as inputs float high, output pins read their
+                // latch; either way a grounded switch pulls the line low.
+                const paOut = this.ram[0xDC00] | ~this.ram[0xDC02];
+                const pbOut = this.ram[0xDC01] | ~this.ram[0xDC03];
+                let value = paOut & this.joystick2;
 
-            case 0x01: // Port B - Keyboard column read / Joystick 1
-                // Joystick 1 is ORed with keyboard matrix
-                let result = this.joystick1;
-
-                if (this.stopKeyPressed) {
-                    const rowSelect = this.ram[0xDC00];
-                    if ((rowSelect & 0x80) === 0) {
-                        result &= 0x7F; // STOP key pressed (active low)
+                // Reverse scan: a column driven low on port B pulls every row
+                // that has a key held in that column low on port A.
+                for (let col = 0; col < 8; col++) {
+                    if (pbOut & (1 << col)) continue;
+                    for (let row = 0; row < 8; row++) {
+                        if (!(this.keyboardMatrix[row] & (1 << col))) {
+                            value &= ~(1 << row);
+                        }
                     }
                 }
-                return result;
+                return value & 0xFF;
+            }
+
+            case 0x01: {
+                // Port B - keyboard column read (input) / Joystick 1
+                const paOut = this.ram[0xDC00] | ~this.ram[0xDC02];
+                let value = (this.ram[0xDC01] | ~this.ram[0xDC03]) & this.joystick1;
+
+                for (let row = 0; row < 8; row++) {
+                    if (paOut & (1 << row)) continue;  // row not selected
+                    value &= this.keyboardMatrix[row];
+                }
+                return value & 0xFF;
+            }
 
             case 0x04: // Timer A Low byte
                 return this.cia1.timerACounter & 0xFF;
@@ -995,13 +1057,40 @@ export class C64Machine {
     }
 
     //
-    // Press the RUN/STOP key
+    // Press or release a key in the C64 keyboard matrix
+    //
+    // This is the physical-key path: the KERNAL's scan routine sees the matrix
+    // and converts it to PETSCII itself, so shifted characters, key repeat and
+    // direct matrix reads by games all behave as they do on real hardware.
+    // For synthetic typing that should bypass the scan, use addKey() instead.
+    //
+    // @param {number} row - Matrix row 0-7 (CIA1 port A line)
+    // @param {number} col - Matrix column 0-7 (CIA1 port B line)
+    // @param {boolean} pressed - True to press, false to release
+    //
+    setKey(row, col, pressed) {
+        if (row < 0 || row > 7 || col < 0 || col > 7) return;
+        if (pressed) {
+            this.keyboardMatrix[row] &= ~(1 << col);
+        } else {
+            this.keyboardMatrix[row] |= (1 << col);
+        }
+    }
+
+    //
+    // Release every key in the matrix. Used when the page loses focus, so keys
+    // held at that moment do not stick down.
+    //
+    releaseAllKeys() {
+        this.keyboardMatrix.fill(0xFF);
+    }
+
+    //
+    // Press the RUN/STOP key (matrix row 7, column 7) for a short moment
     //
     pressStop() {
-        this.stopKeyPressed = true;
-        setTimeout(() => {
-            this.stopKeyPressed = false;
-        }, 150);
+        this.setKey(7, 7, true);
+        setTimeout(() => this.setKey(7, 7, false), 150);
     }
 
     //
@@ -1089,6 +1178,10 @@ export class C64Machine {
         // Begin new audio frame
         if (this.audioEnabled) {
             this.sid.beginFrame();
+        } else {
+            // Nothing will clock the SID this frame, so retire any queued
+            // register writes now. Otherwise the queue grows without bound.
+            this.sid.applyPendingWrites();
         }
 
         // Audio interleaving state
@@ -1113,14 +1206,6 @@ export class C64Machine {
         let cyclesExecuted = 0;
         while (cyclesExecuted < this.cyclesPerFrame) {
             if (cpu.halted) break;
-
-            // DEBUG: Trace first few instructions of playback
-            if (this.traceEnabled && this.traceCount < 50) {
-                const pc = cpu.PC;
-                const op = this.read(pc);
-                console.log(`TRACE: PC=$${pc.toString(16)} Op=$${op.toString(16)} A=$${cpu.A.toString(16)} X=$${cpu.X.toString(16)} Y=$${cpu.Y.toString(16)}`);
-                this.traceCount++;
-            }
 
             const stepCycles = cpu.step();
             cyclesExecuted += stepCycles;
@@ -1231,9 +1316,12 @@ export class C64Machine {
             const cyclesSinceLast = currentCycles - lastSidClockCycles;
             if (cyclesSinceLast > 0) {
                 const targetBuf = audioBuffer.subarray(audioBufferIndex);
-                this.sid.clock(cyclesSinceLast, targetBuf, this.frameCycleStart + lastSidClockCycles);
+                audioBufferIndex += this.sid.clock(cyclesSinceLast, targetBuf, this.frameCycleStart + lastSidClockCycles);
             }
         }
+
+        // Number of audio samples written into audioBuffer by this frame.
+        this.audioSamplesGenerated = audioBufferIndex;
 
         return cyclesExecuted;
     }
@@ -1294,7 +1382,6 @@ export class C64Machine {
 
         // Parse header (64 bytes)
         const headerLength = (data[0x10] << 24) | (data[0x11] << 16) | (data[0x12] << 8) | data[0x13];
-        const version = (data[0x14] << 8) | data[0x15];
         const cartType = (data[0x16] << 8) | data[0x17];
         const exrom = data[0x18];  // /EXROM line (active low: 0=active, 1=inactive)
         const game = data[0x19];   // /GAME line (active low: 0=active, 1=inactive)
@@ -1305,11 +1392,9 @@ export class C64Machine {
             name += String.fromCharCode(data[i]);
         }
 
-        console.log(`CRT: ${name || 'Unknown'}, Type: ${cartType}, Version: ${version >> 8}.${version & 0xFF}`);
-        console.log(`CRT: EXROM=${exrom}, GAME=${game}`);
+        console.log(`CRT: ${name || 'Unknown'} (type ${cartType}), EXROM=${exrom}, GAME=${game}`);
 
-        // Set cartridge lines
-        this.cartExrom = exrom !== 0;
+        // Set cartridge lines        this.cartExrom = exrom !== 0;
         this.cartGame = game !== 0;
 
         // Parse CHIP packets
@@ -1333,8 +1418,6 @@ export class C64Machine {
             // Extract ROM data
             const romData = data.slice(offset + 16, offset + 16 + romSize);
 
-            console.log(`CRT CHIP: Type=${chipType}, Bank=${bank}, Addr=$${loadAddr.toString(16).padStart(4, '0')}, Size=${romSize}`);
-
             // Store in appropriate ROM slot based on load address
             if (loadAddr === 0x8000) {
                 this.cartRomL = new Uint8Array(romData);
@@ -1357,7 +1440,6 @@ export class C64Machine {
         this.cartRomH = null;
         this.cartGame = true;
         this.cartExrom = true;
-        console.log('Cartridge removed');
     }
 }
 

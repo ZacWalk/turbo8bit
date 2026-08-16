@@ -501,7 +501,6 @@
         
         try {
             await player.load(url);
-            console.log('SID file loaded:', url);
             
             // Reset frame counter display
             const frameCounterEl = document.getElementById('frame-counter');
@@ -550,14 +549,11 @@
         
         try {
             player = new SIDPlayer();
-            console.log('SIDPlayer created:', player);
             
             // Load the first (active) SID button
             const activeBtn = document.querySelector('.sid-btn.active');
             if (activeBtn) {
-                console.log('Loading SID:', activeBtn.dataset.url);
                 await loadSong(activeBtn.dataset.url);
-                console.log('SID loaded');
             }
         } catch (e) {
             console.error('Failed to initialize SIDPlayer:', e);
@@ -577,7 +573,6 @@
         if (btn.disabled) return;
         
         if (isPlaying) {
-            console.log('Stopping playback');
             player.stop();
             isPlaying = false;
             setPlayButton(false);
@@ -585,8 +580,6 @@
                 cancelAnimationFrame(animationId);
             }
         } else {
-            console.log('Starting playback');
-            
             // Disable button while loading
             btn.disabled = true;
             btn.style.opacity = '0.5';
@@ -594,7 +587,6 @@
             
             try {
                 await player.play();
-                console.log('Playback started, isPlaying:', player.isPlaying);
                 isPlaying = true;
                 setPlayButton(true);
                 updateVisualization();

@@ -183,6 +183,10 @@ export class VICIIRenderer {
             this.imageData = null;
             this.imageDataArray = null;
         }
+
+        // Built on first use, once the ImageData backing buffer is known
+        this.imageDataU32 = null;
+        this.spriteCollisionBuffer = null;
     }
 
     //
@@ -328,20 +332,35 @@ export class VICIIRenderer {
         // Determine if this scanline is in the main display area (Y)
         const inScreenY = canvasY >= this.borderY && canvasY < (this.borderY + this.screenHeight);
 
-        // First, fill the entire scanline with border/background color
         const rowOffset = canvasY * w;
-        for (let x = 0; x < w; x++) {
-            const inScreenX = x >= this.borderX && x < (this.borderX + this.screenWidth);
-            if (inScreenX && inScreenY) {
-                frameBuffer[rowOffset + x] = bgColor;
-            } else {
-                frameBuffer[rowOffset + x] = borderColor;
-            }
+        if (!inScreenY) {
+            frameBuffer.fill(borderColor, rowOffset, rowOffset + w);
+            return;
         }
 
-        // If not in the main display area, we're done (border only)
-        if (!inScreenY) return;
+        // Fill the scanline with border/background color before drawing over it
+        const screenStart = rowOffset + this.borderX;
+        const screenEnd = screenStart + this.screenWidth;
+        frameBuffer.fill(borderColor, rowOffset, screenStart);
+        frameBuffer.fill(bgColor, screenStart, screenEnd);
+        frameBuffer.fill(borderColor, screenEnd, rowOffset + w);
 
+        this.renderDisplayWindow(frameBuffer, ram, canvasY, rasterLine);
+
+        // CSEL (bit 3 of $D016) narrows the display window to 38 columns: the
+        // border unit covers 7 pixels on the left and 9 on the right. It paints
+        // over the graphics and sprites, so it has to run last.
+        if ((ram[VIC_CTRL2] & 0x08) === 0) {
+            frameBuffer.fill(borderColor, screenStart, screenStart + 7);
+            frameBuffer.fill(borderColor, screenEnd - 9, screenEnd);
+        }
+    }
+
+    //
+    // Render the graphics and sprites inside the display window for one scanline
+    // @private
+    //
+    renderDisplayWindow(frameBuffer, ram, canvasY, rasterLine) {
         // Get graphics mode
         const mode = this.getGraphicsMode(ram);
         if (mode === MODE_INVALID) return; // Black screen for invalid modes (already bg)
@@ -407,19 +426,23 @@ export class VICIIRenderer {
     }
 
     //
-    // Blit frame buffer (Uint32Array of RGB values) to ImageData
+    // Blit frame buffer (Uint32Array of 0xRRGGBB values) to ImageData
     // @param {Uint8ClampedArray} imageData - Canvas ImageData array
     // @param {Uint32Array} frameBuffer - Frame buffer with packed RGB values
     //
     blitFrameBuffer(imageData, frameBuffer) {
         const len = this.width * this.height;
+
+        // ImageData is little-endian RGBA, so one 32-bit store per pixel beats
+        // four byte stores. Reuse the view across frames.
+        if (!this.imageDataU32 || this.imageDataU32.buffer !== imageData.buffer) {
+            this.imageDataU32 = new Uint32Array(imageData.buffer);
+        }
+        const out = this.imageDataU32;
+
         for (let i = 0; i < len; i++) {
-            const color = frameBuffer[i];
-            const o = i << 2;
-            imageData[o] = (color >> 16) & 255;     // R
-            imageData[o + 1] = (color >> 8) & 255;  // G
-            imageData[o + 2] = color & 255;         // B
-            imageData[o + 3] = 255;                 // A
+            const c = frameBuffer[i];
+            out[i] = 0xFF000000 | ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF);
         }
     }
 
@@ -643,14 +666,15 @@ export class VICIIRenderer {
         const spriteMulticolor = ram[SPRITE_MULTICOLOR];
         const spritePriority = ram[SPRITE_PRIORITY];
 
-        const spriteMulticolor0 = ram[0xD025] & 0x0F;
-        const spriteMulticolor1 = ram[0xD026] & 0x0F;
+        const spriteMulticolor0 = PALETTE[ram[0xD025] & 0x0F];
+        const spriteMulticolor1 = PALETTE[ram[0xD026] & 0x0F];
 
         const { vicBank, screenAddr } = memAddrs;
         const spritePtrBase = screenAddr + 0x03F8;
-        const bgColor = ram[0xD021] & 0x0F;
+        const bgPalette = PALETTE[ram[0xD021] & 0x0F];
         const w = this.width;
         const rowOffset = canvasY * w;
+        const collision = this.spriteCollisionBuffer;
 
         // Render sprites in reverse order (7 to 0) so lower-numbered sprites appear on top
         for (let sprite = 7; sprite >= 0; sprite--) {
@@ -670,22 +694,26 @@ export class VICIIRenderer {
             if (canvasY < spriteY || canvasY >= spriteY + spriteHeight) continue;
 
             // Calculate which row of the sprite we're rendering
-            const spriteRow = yExpand ? Math.floor((canvasY - spriteY) / 2) : (canvasY - spriteY);
+            const spriteRow = yExpand ? ((canvasY - spriteY) >> 1) : (canvasY - spriteY);
 
             const spritePtr = ram[spritePtrBase + sprite];
             const spriteDataAddr = vicBank + spritePtr * 64;
-            const spriteColor = ram[0xD027 + sprite] & 0x0F;
+            const spriteColor = PALETTE[ram[0xD027 + sprite] & 0x0F];
 
             const isMulticolor = spriteMulticolor & (1 << sprite);
-            const xExpand = spriteXExpand & (1 << sprite);
+            // X expansion doubles the width of every pixel, so both the pixel
+            // offset within the sprite and the pixel width scale by 2.
+            const xScale = (spriteXExpand & (1 << sprite)) ? 2 : 1;
             const isBehindBackground = spritePriority & (1 << sprite);
+            const spriteBit = 1 << sprite;
 
             // Render this row of the sprite (3 bytes = 24 pixels)
             for (let byteCol = 0; byteCol < 3; byteCol++) {
                 const spriteDataByte = ram[spriteDataAddr + spriteRow * 3 + byteCol];
+                if (spriteDataByte === 0) continue;
 
                 if (isMulticolor) {
-                    // Multicolor mode: 12 double-width pixels per row
+                    // Multicolor mode: pixels are 2 (or 4 when expanded) wide
                     for (let bitPairIdx = 0; bitPairIdx < 4; bitPairIdx++) {
                         const colorBits = (spriteDataByte >> (6 - bitPairIdx * 2)) & 0x03;
                         if (colorBits === 0) continue; // Transparent
@@ -697,33 +725,26 @@ export class VICIIRenderer {
                             case 3: pixelColor = spriteMulticolor1; break;
                         }
 
-                        // Calculate pixel positions
-                        const baseX = spriteX + byteCol * 8 + bitPairIdx * 2;
-                        const xWidth = xExpand ? 4 : 2;
+                        const baseX = spriteX + (byteCol * 8 + bitPairIdx * 2) * xScale;
+                        const xWidth = 2 * xScale;
 
                         for (let dx = 0; dx < xWidth; dx++) {
-                            const px = baseX + (xExpand ? dx * 1 : dx);
-                            if (px >= 0 && px < w) {
-                                // Collision checks
-                                const otherSprite = this.spriteCollisionBuffer[px];
-                                if (otherSprite !== -1) {
-                                    ram[0xD01E] |= (1 << sprite) | (1 << otherSprite);
-                                }
-                                this.spriteCollisionBuffer[px] = sprite;
+                            const px = baseX + dx;
+                            if (px < 0 || px >= w) continue;
 
-                                const bgPalette = PALETTE[ram[0xD021] & 0x0F];
-                                if (frameBuffer[rowOffset + px] !== bgPalette) {
-                                    ram[0xD01F] |= (1 << sprite);
-                                }
-
-                                // Priority check: if behind background, only draw on background pixels
-                                if (isBehindBackground) {
-                                    const existingColor = frameBuffer[rowOffset + px];
-                                    // const bgPalette = PALETTE[bgColor];
-                                    if (existingColor !== bgPalette) continue;
-                                }
-                                frameBuffer[rowOffset + px] = PALETTE[pixelColor];
+                            const otherSprite = collision[px];
+                            if (otherSprite !== -1) {
+                                ram[0xD01E] |= spriteBit | (1 << otherSprite);
                             }
+                            collision[px] = sprite;
+
+                            const existingColor = frameBuffer[rowOffset + px];
+                            if (existingColor !== bgPalette) {
+                                ram[0xD01F] |= spriteBit;
+                                // Behind-background sprites only show on background pixels
+                                if (isBehindBackground) continue;
+                            }
+                            frameBuffer[rowOffset + px] = pixelColor;
                         }
                     }
                 } else {
@@ -731,32 +752,24 @@ export class VICIIRenderer {
                     for (let bit = 0; bit < 8; bit++) {
                         if (!(spriteDataByte & (0x80 >> bit))) continue;
 
-                        const baseX = spriteX + byteCol * 8 + bit;
-                        const xWidth = xExpand ? 2 : 1;
+                        const baseX = spriteX + (byteCol * 8 + bit) * xScale;
 
-                        for (let dx = 0; dx < xWidth; dx++) {
-                            const px = baseX + (xExpand ? dx : 0);
-                            if (px >= 0 && px < w) {
-                                // Collision checks
-                                const otherSprite = this.spriteCollisionBuffer[px];
-                                if (otherSprite !== -1) {
-                                    ram[0xD01E] |= (1 << sprite) | (1 << otherSprite);
-                                }
-                                this.spriteCollisionBuffer[px] = sprite;
+                        for (let dx = 0; dx < xScale; dx++) {
+                            const px = baseX + dx;
+                            if (px < 0 || px >= w) continue;
 
-                                const bgPalette = PALETTE[ram[0xD021] & 0x0F];
-                                if (frameBuffer[rowOffset + px] !== bgPalette) {
-                                    ram[0xD01F] |= (1 << sprite);
-                                }
-
-                                // Priority check
-                                if (isBehindBackground) {
-                                    const existingColor = frameBuffer[rowOffset + px];
-                                    const bgPalette = PALETTE[bgColor];
-                                    if (existingColor !== bgPalette) continue;
-                                }
-                                frameBuffer[rowOffset + px] = PALETTE[spriteColor];
+                            const otherSprite = collision[px];
+                            if (otherSprite !== -1) {
+                                ram[0xD01E] |= spriteBit | (1 << otherSprite);
                             }
+                            collision[px] = sprite;
+
+                            const existingColor = frameBuffer[rowOffset + px];
+                            if (existingColor !== bgPalette) {
+                                ram[0xD01F] |= spriteBit;
+                                if (isBehindBackground) continue;
+                            }
+                            frameBuffer[rowOffset + px] = spriteColor;
                         }
                     }
                 }

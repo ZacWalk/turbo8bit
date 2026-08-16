@@ -12,7 +12,8 @@
                 <h2>C64 SCREEN</h2>
             </div>
 
-            <canvas id="screen" width="384" height="272"></canvas>
+            <canvas id="screen" width="384" height="272" tabindex="0"
+                    aria-label="Commodore 64 screen. Focus it and type to use the C64 keyboard."></canvas>
             
             <div class="c64-controls">
                 <button onclick="emulator.typeText('RUN\n')">RUN</button>
@@ -245,8 +246,6 @@ async function loadBasicProgram(result) {
         ram[0x31] = endAddress & 0xFF;
         ram[0x32] = (endAddress >> 8) & 0xFF;
         
-        console.log(`BASIC program loaded: $${loadAddress.toString(16).padStart(4, '0')}-$${endAddress.toString(16).padStart(4, '0')} (${bytes.length - 2} bytes)`);
-        
         // Type RUN to execute
         setTimeout(() => {
             emulator.typeText('RUN\n');
@@ -302,18 +301,20 @@ window.toggleJoystick = toggleJoystick;
 // Keyboard handling - prevent editor from capturing when focused on emulator
 document.addEventListener('keydown', e => {
     // Don't capture keys when typing in the editor
-    if (e.target.classList.contains('editor-textarea')) {
+    if (e.target?.classList?.contains('editor-textarea')) {
         return;
     }
     emulator.handleKeyPress(e);
 });
 
 document.addEventListener('keyup', e => {
-    if (e.target.classList.contains('editor-textarea')) {
-        return;
-    }
+    // Not gated on the editor: a key pressed on the emulator and released after
+    // focus moved into the editor still has to be lifted off the matrix.
     emulator.handleKeyRelease(e);
 });
+
+// Alt-tabbing away while holding a key would otherwise leave it stuck down.
+window.addEventListener('blur', () => emulator.releaseAllKeys());
 
 window.addEventListener('load', () => {
     document.body.tabIndex = 0;

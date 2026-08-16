@@ -36,7 +36,6 @@ async function loadMemoryData() {
         }
         const data = await response.json();
         memoryEntries = data.entries || [];
-        console.log(`Loaded ${memoryEntries.length} memory entries`);
     } catch (error) {
         console.warn('Could not load memory map data:', error);
     }

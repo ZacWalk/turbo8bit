@@ -12,7 +12,8 @@
                 <h2>C64 SCREEN</h2>
             </div>
 
-            <canvas id="screen" width="384" height="272"></canvas>
+            <canvas id="screen" width="384" height="272" tabindex="0"
+                    aria-label="Commodore 64 screen. Focus it and type to use the C64 keyboard."></canvas>
             
             <div class="c64-controls asm-controls">
                 <button id="muteBtn" class="mute-btn muted" onclick="toggleMute()">🔇 MUTED</button>
@@ -349,8 +350,8 @@ function debuggerStep() {
         return;
     }
 
-    const isJsr = emulator.machine.ram[cpu.PC] === 0x20;
-    const target = emulator.machine.ram[cpu.PC + 1] | (emulator.machine.ram[cpu.PC + 2] << 8);
+    const isJsr = emulator.machine.peek(cpu.PC) === 0x20;
+    const target = emulator.machine.peek(cpu.PC + 1) | (emulator.machine.peek(cpu.PC + 2) << 8);
     const stepsInto = !isJsr
         || (target >= debugger_.codeStart && target < debugger_.codeEnd);
 
@@ -425,6 +426,10 @@ let shownLine;
 
 const hex = (value, digits) => '$' + value.toString(16).toUpperCase().padStart(digits, '0');
 
+// Banking-aware but side-effect-free view, so redrawing the disassembly cannot
+// clear collision latches or CIA interrupt flags out from under the program.
+const machineView = { read: (addr) => emulator.machine.peek(addr) };
+
 //
 // Highlight Run or Step button to show current mode
 // @param {string|null} mode - 'run', 'step', or null to clear
@@ -465,7 +470,7 @@ function renderCpuState() {
         el.classList.toggle('set', !!(cpu.P & mask));
     }
 
-    const instr = disassembleInstruction(emulator.machine.ram, cpu.PC);
+    const instr = disassembleInstruction(machineView, cpu.PC);
     const bytes = instr.bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
     sourceLineEl.textContent = statusMessage
         || `${hex(cpu.PC, 4)}: ${bytes.padEnd(9)} ${instr.text}`;
@@ -523,18 +528,20 @@ window.toggleMute = toggleMute;
 
 document.addEventListener('keydown', e => {
     // Don't capture keys when typing in the editor
-    if (e.target.classList.contains('editor-textarea')) {
+    if (e.target?.classList?.contains('editor-textarea')) {
         return;
     }
     emulator.handleKeyPress(e);
 });
 
 document.addEventListener('keyup', e => {
-    if (e.target.classList.contains('editor-textarea')) {
-        return;
-    }
+    // Not gated on the editor: a key pressed on the emulator and released after
+    // focus moved into the editor still has to be lifted off the matrix.
     emulator.handleKeyRelease(e);
 });
+
+// Alt-tabbing away while holding a key would otherwise leave it stuck down.
+window.addEventListener('blur', () => emulator.releaseAllKeys());
 
 // ============================================================================
 // Initialization

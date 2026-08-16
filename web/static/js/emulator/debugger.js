@@ -55,6 +55,9 @@ export class C64Debugger {
         this.machine = machine;
         this.cpu = machine.cpu;
 
+        // Banking-aware but side-effect-free view for the disassembler.
+        this.memoryView = { read: (addr) => machine.peek(addr) };
+
         // Debugger state
         this.state = DebuggerState.STOPPED;
         this.breakpoints = new Set();
@@ -144,7 +147,7 @@ export class C64Debugger {
         const prevPC = this.cpu.PC;
 
         // Disassemble current instruction before executing
-        const instruction = disassembleInstruction(this.machine.ram, this.cpu.PC);
+        const instruction = disassembleInstruction(this.memoryView, this.cpu.PC);
 
         // Execute one instruction
         const cycles = this.executeInstruction();
@@ -353,7 +356,7 @@ export class C64Debugger {
         let addr = start;
 
         for (let i = 0; i < count && addr < 0xFFFF; i++) {
-            const instr = disassembleInstruction(this.machine.ram, addr);
+            const instr = disassembleInstruction(this.memoryView, addr);
             instructions.push({
                 address: addr,
                 bytes: instr.bytes,
@@ -371,10 +374,14 @@ export class C64Debugger {
     // Get memory dump
     // @param {number} start - Start address
     // @param {number} length - Number of bytes
-    // @returns {Uint8Array} Memory contents
+    // @returns {Uint8Array} Memory contents as the CPU would see them
     //
     getMemory(start, length) {
-        return this.machine.ram.slice(start, start + length);
+        const bytes = new Uint8Array(length);
+        for (let i = 0; i < length; i++) {
+            bytes[i] = this.machine.peek(start + i);
+        }
+        return bytes;
     }
 
     //
@@ -393,7 +400,7 @@ export class C64Debugger {
             const chars = [];
 
             for (let j = 0; j < bytesPerLine && (i + j) < length; j++) {
-                const byte = this.machine.ram[addr + j];
+                const byte = this.machine.peek(addr + j);
                 bytes.push(byte.toString(16).padStart(2, '0').toUpperCase());
                 chars.push(byte >= 32 && byte < 127 ? String.fromCharCode(byte) : '.');
             }

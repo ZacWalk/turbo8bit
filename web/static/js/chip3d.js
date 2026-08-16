@@ -320,6 +320,8 @@ export function initChip3DScene(container, options = {}) {
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setClearColor(0x000000, 0); // Transparent
+    // Decorative: the chip's part number and role are already in the card text.
+    renderer.domElement.setAttribute('aria-hidden', 'true');
     container.appendChild(renderer.domElement);
 
     // Controls

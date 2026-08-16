@@ -36,7 +36,6 @@ window.setChipImages = function (images) {
             chipImageOpacity[key] = 0; // Start fully transparent
         }
     }
-    console.log('Loaded 3D chip images:', Object.keys(images));
 };
 
 // --- Configuration ---

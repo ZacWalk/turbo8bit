@@ -790,44 +790,56 @@ export class Assembler {
 }
 
 /**
+* Read a byte from a memory source for disassembly.
+*
+* Accepts either a plain indexable buffer (Uint8Array) or anything exposing a
+* `read(addr)` method, such as C64Machine. Using the bus is what makes banked-in
+* ROM and I/O disassemble correctly instead of showing the RAM underneath.
+*
+* @param {Uint8Array|{read: function(number): number}} memory
+* @param {number} address
+* @returns {number} Byte value
+*/
+function readMemoryByte(memory, address) {
+    return (typeof memory.read === 'function' ? memory.read(address) : memory[address]) & 0xFF;
+}
+
+/**
 * Disassemble a single instruction
-* @param {Uint8Array} memory - Memory buffer
+* @param {Uint8Array|{read: function(number): number}} memory - Memory buffer or bus
 * @param {number} address - Address to disassemble
 * @returns {Object} Disassembly result
 */
 export function disassembleInstruction(memory, address) {
-    const opcode = memory[address];
+    const opcode = readMemoryByte(memory, address);
 
-    // Find the mnemonic and mode for this opcode
-    for (const [mnemonic, modes] of Object.entries(OPCODES)) {
-        for (const [mode, code] of Object.entries(modes)) {
-            if (code === opcode) {
-                const size = getInstructionSize(mode);
-                let operand = '';
-                let bytes = [opcode];
+    const entry = getOpcodeTable().get(opcode);
+    if (entry) {
+        const { mnemonic, mode } = entry;
+        const size = getInstructionSize(mode);
+        let operand = '';
+        let bytes = [opcode];
 
-                if (size === 2) {
-                    const value = memory[address + 1];
-                    bytes.push(value);
-                    operand = formatOperand(mode, value, address + 2);
-                } else if (size === 3) {
-                    const lo = memory[address + 1];
-                    const hi = memory[address + 2];
-                    bytes.push(lo, hi);
-                    operand = formatOperand(mode, lo | (hi << 8), address + 3);
-                }
-
-                return {
-                    address,
-                    bytes,
-                    size,
-                    mnemonic,
-                    mode,
-                    operand,
-                    text: `${mnemonic} ${operand}`.trim()
-                };
-            }
+        if (size === 2) {
+            const value = readMemoryByte(memory, address + 1);
+            bytes.push(value);
+            operand = formatOperand(mode, value, address + 2);
+        } else if (size === 3) {
+            const lo = readMemoryByte(memory, address + 1);
+            const hi = readMemoryByte(memory, address + 2);
+            bytes.push(lo, hi);
+            operand = formatOperand(mode, lo | (hi << 8), address + 3);
         }
+
+        return {
+            address,
+            bytes,
+            size,
+            mnemonic,
+            mode,
+            operand,
+            text: `${mnemonic} ${operand}`.trim()
+        };
     }
 
     // Unknown opcode
@@ -840,6 +852,23 @@ export function disassembleInstruction(memory, address) {
         operand: '',
         text: `??? ($${opcode.toString(16).padStart(2, '0').toUpperCase()})`
     };
+}
+
+// Reverse lookup from opcode byte to { mnemonic, mode }, built on first use.
+let opcodeTable = null;
+
+function getOpcodeTable() {
+    if (!opcodeTable) {
+        opcodeTable = new Map();
+        for (const [mnemonic, modes] of Object.entries(OPCODES)) {
+            for (const [mode, code] of Object.entries(modes)) {
+                if (!opcodeTable.has(code)) {
+                    opcodeTable.set(code, { mnemonic, mode });
+                }
+            }
+        }
+    }
+    return opcodeTable;
 }
 
 /**

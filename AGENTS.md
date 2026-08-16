@@ -1,237 +1,208 @@
-# Copilot Instructions
+# Agent instructions
 
-You are an expert software engineer who prioritizes **Theory Building** and **Design for Change**. Your goal is to write code that is not just syntactically correct, but creates a clear, shared mental model for both human developers and future AI agents.
+**Turbo8bit** — a Flask site on Google App Engine that teaches the Commodore 64,
+built around a C64 emulator written from scratch in JavaScript. Hosted at
+turbo8bit.com.
 
-This project is **Turbo8bit** - a Python Google App Engine website celebrating the Commodore 64. It is hosted at turbo8bit.com.
+Prioritise **theory building** and **design for change**: the code should leave a
+clear, shared mental model for the next human or agent to read it.
 
-The site features interactive C64 history, hardware documentation, a SID chip player, memory map explorer, and an in-browser C64 emulator.
+See [README.md](README.md) for the feature list, module table and setup. This
+file covers what is *not* obvious from reading the code.
 
-## Tech Stack
-- **Backend**: Python 3.10, Flask, Google App Engine Standard Environment
-- **Frontend**: Vanilla JavaScript (ES6 modules), CSS3
-- **Audio**: Custom SID chip emulator
-- **Testing**: pytest, py_mini_racer (runs JS in Python for testing)
+## Tech stack
 
-## Coding Style
-- Follow PEP 8 guidelines for Python
-- Use descriptive variable names
-- Prefer simple, readable code over complex one-liners
-- JavaScript uses ES6 modules with explicit imports/exports
+- **Backend**: Python 3.10, Flask, App Engine Standard
+- **Frontend**: vanilla ES6 modules, no build step, no framework, no bundler
+- **Tests**: pytest driving the emulator's JavaScript through py_mini_racer
 
-## Project Structure
+There is deliberately no npm, no transpiler and no build artifact — the browser
+loads the modules exactly as they are written on disk. Three third-party
+resources are loaded from the network and that is the whole list: Three.js (via
+an import map in `hardware.html` and `sid.html`), Google Sign-In, and two Google
+Fonts. Keep it that way.
 
-```
-├── dd.ps1                  # CLI tool: run, deploy, test, gen, format, crt
-├── crt/                    # Cartridge images published to Cloud Storage
-├── memory-map.txt          # Source data for tools/parse_memmap.py
-├── web/                    # Flask application
-│   ├── main.py             # Routes, SEO, auth, SITE_PAGES (nav + sitemap)
-│   ├── app.yaml            # Google App Engine configuration
-│   ├── requirements.txt    # Python dependencies
-│   ├── templates/          # Jinja2 templates
-│   │   ├── base.html       # Header/nav/footer shell
-│   │   ├── index.html      # BASIC lab (emulator + BASIC editor)
-│   │   ├── asm.html        # Assembly lab (emulator + assembler + debugger)
-│   │   ├── hardware.html   # Bus simulator + chip reference
-│   │   ├── memmap.html     # Memory map explorer
-│   │   ├── sid.html        # SID chip info and music player
-│   │   ├── about.html      # About page
-│   │   └── sitemap.xml     # Sitemap template
-│   └── static/
-│       ├── css/style.css   # C64-themed retro styles
-│       ├── basic/          # BASIC sample programs + index.json
-│       ├── assembly/       # Assembly sample programs + index.json
-│       ├── js/
-│       │   ├── examples.js     # Sample picker shared by / and /asm
-│       │   ├── hardware.js     # Bus simulation canvas + scenarios
-│       │   ├── memmap.js       # Memory map explorer
-│       │   ├── chip3d.js       # Three.js DIP chip renderer
-│       │   ├── memmap-data.json
-│       │   └── emulator/       # C64 & SID emulator modules (ES6)
-│       │       ├── emulator.js         # C64Emulator UI (entry point for / and /asm)
-│       │       ├── sid-player.js       # SIDPlayer class (entry point for /sid)
-│       │       ├── machine.js          # C64Machine + clock constants
-│       │       ├── mos6510.js          # 6510 CPU emulator
-│       │       ├── roms.js             # C64 ROM data (BASIC, KERNAL, CHARS)
-│       │       ├── sid.js              # SID chip + DAC emulation
-│       │       ├── psid-driver.js      # PSID driver installation
-│       │       ├── voice.js            # Voice + envelope + waveform generators
-│       │       ├── filter.js           # SID filter + external filter
-│       │       ├── vic-ii.js           # VIC-II graphics rendering (5 display modes)
-│       │       ├── cartridge.js        # CRT cartridge format + bank switching
-│       │       ├── assembler.js        # 6502 assembler + disassembler
-│       │       ├── basic-tokenizer.js  # BASIC tokenizer + syntax highlighting
-│       │       ├── debugger.js         # Stepping/breakpoint state machine
-│       │       └── editor.js           # Syntax-highlighted code editor
-│       ├── sid/            # SID music files (.sid format)
-│       └── icons/          # Generated favicons + OG image
-├── tools/                  # CLI utilities
-│   ├── gen_favicons.py     # Generate favicons + social image
-│   └── parse_memmap.py     # Memory map parser
-└── tests/                  # Test suite (pytest + py_mini_racer)
+## Commands
+
+```powershell
+.\dd.ps1 run             # dev server on http://localhost:8082
+.\dd.ps1 test            # pytest; baseline is 82 passed, 25 skipped, 0 failed
+.\dd.ps1 format          # Black (-Check to report without rewriting)
+.\dd.ps1 deploy          # App Engine (project is hard-pinned inside dd.ps1)
+.\dd.ps1 gen             # regenerate favicons + OG image
+.\dd.ps1 crt             # publish CRT cartridges to Cloud Storage
 ```
 
-## CLI Tool (dd.ps1)
-- `.\dd.ps1 run` - Start local dev server at http://localhost:8082
-- `.\dd.ps1 test` - Run all tests using pytest
-- `.\dd.ps1 deploy` - Deploy to Google App Engine
-- `.\dd.ps1 gen` - Regenerate favicons and the social image
-- `.\dd.ps1 crt` - Publish CRT cartridge files to Cloud Storage
-- `.\dd.ps1 format` - Format Python files with Black
-- `.\dd.ps1 help` - Show all commands
+The 25 skips are cartridge tests whose CRT dumps are not in the repo. If the
+collected count changes from 107, something was lost — investigate.
 
-## Routes
-- `/` - BASIC lab: emulator + BASIC editor
-- `/asm` - Assembly lab: emulator + assembler + step debugger
-- `/hardware` - Bus simulation and chip reference
-- `/memmap` - Memory map / bank switching explorer
-- `/sid` - SID chip information and music player
-- `/about` - About page
+## Layout
+
+```
+dd.ps1                        # the only entry point for run/test/deploy/gen/crt/format
+memory-map.txt                # source data for tools/parse_memmap.py
+web/
+  main.py                     # routes, SEO, Google auth, SITE_PAGES
+  app.yaml                    # App Engine config; includes the git-ignored secrets.yaml
+  templates/                  # base.html shell + one template per route
+  static/
+    css/style.css             # every style on the site, single file
+    basic/  assembly/         # sample programs + index.json manifests
+    sid/                      # .sid tunes
+    js/
+      examples.js             # sample picker shared by / and /asm
+      hardware.js chip3d.js   # bus simulation canvas + Three.js DIP renderer
+      memmap.js               # memory map explorer
+      memmap-data.json        # 580KB of annotations; only /memmap loads it
+      emulator/               # the C64 emulator (see README for the module table)
+tools/                        # gen_favicons.py, parse_memmap.py
+tests/                        # pytest + py_mini_racer, helpers in tests/js/
+```
 
 Routes, nav labels and sitemap entries all come from `SITE_PAGES` in
-[web/main.py](web/main.py) - add a page there and the nav and sitemap follow.
+[web/main.py](web/main.py) — add a page there and the nav and sitemap follow.
 
-## Testing Strategy
+## Emulator invariants
 
-Tests use **py_mini_racer** to run JavaScript code in Python. This allows testing the C64 emulator, SID chip, CPU emulation, and audio generation without a browser.
+These are load-bearing and easy to break.
+
+**Everything goes through the bus.** `C64Machine.read(addr)` / `.write(addr, val)`
+is the single place banking, I/O and cartridge mapping are decided. Indexing
+`machine.ram` directly bypasses banking and makes ROM and I/O look like zeroed
+RAM (`$E5CD: 00 BRK` instead of real KERNAL code).
+
+**Display reads use `peek()`, not `read()`.** A real read has side effects: it
+clears the sprite collision latches and the CIA interrupt registers, and can
+bank-switch a cartridge. `machine.peek(addr)` makes the same banking decision
+without them, and is what disassembly, hex dumps and step-over detection must
+use — otherwise inspecting memory silently eats the running program's pending
+interrupts.
+
+**Audio flows one way.** `machine.runFrame(buf)` is the only correct audio path:
+it interleaves `sid.clock()` with CPU execution once per scanline so
+cycle-timestamped SID writes land in the right place, and reports the sample
+count in `machine.audioSamplesGenerated`. `C64Emulator` then moves those samples
+into a ring buffer that the Web Audio callback drains. Never generate audio
+directly from the audio callback — the callback rate and the frame rate do not
+match, and you get gaps. `machine.generateAudio()` clocks a whole frame in one
+call and exists only for tests.
+
+**A muted machine still needs its SID drained.** When `audioEnabled` is false
+nothing clocks the SID, so `runFrame` calls `sid.applyPendingWrites()`. Without
+it the write queue grows without bound.
+
+**Two separate keyboard paths, never mixed.**
+- Physical keys → `machine.setKey(row, col, pressed)`, the real 8×8 matrix. The
+  KERNAL's scan routine does the PETSCII conversion, which is what makes shifted
+  characters, key repeat and games that read the matrix directly all work.
+- Synthetic typing → `machine.addKey(petscii)`, injected straight into the KERNAL
+  buffer at `$0277`.
+
+Driving the same keystroke through both produces duplicate characters, because
+the KERNAL scan would inject the matrix key on top of the one you buffered.
+
+**Only `updateShiftKey()` may touch matrix position [1,7].** A PC and a C64 put
+SHIFT in different places: `*` is SHIFT+8 on a PC but an unshifted C64 key, while
+`'` is unshifted on a PC and SHIFT+7 on a C64. So each mapping entry declares
+whether it needs the C64 SHIFT on, off, or inherited from the physical key, and
+one function resolves them. Letting a key press [1,7] itself desyncs the moment
+two shifted keys overlap or the OS repeats a keydown.
+
+**The KERNAL scans the matrix once per frame (~20ms).** A keypress whose down and
+up both land inside one frame is invisible to it, so `C64Emulator` defers such
+releases until a frame has run. Anything else that pokes the matrix needs the
+same treatment.
+
+**The VIC-II renders per scanline, not per frame.** `runFrame` renders the
+*previous* line on each line transition, which gives a raster IRQ handler its
+full ~63 cycles to change registers first. Batch-rendering a whole frame would
+break every split-screen effect.
+
+**Sprite collision registers `$D01E`/`$D01F` clear on read.** They are latches;
+the renderer accumulates into them and `readVIC` resets them.
+
+## Testing
+
+Tests execute the emulator's JavaScript in Python via py_mini_racer, so no
+browser is needed:
 
 ```python
 from py_mini_racer import MiniRacer
-
 ctx = MiniRacer()
-ctx.eval("// JavaScript code here")
+ctx.eval("// JavaScript here")
 ```
 
-Key test areas:
-- **C64 Emulator**: Startup sequence, READY prompt, BASIC program execution
-- **SID file parsing**: Verify PSID/RSID files parse correctly
-- **Player initialization**: Test tune loading and CPU setup
-- **Audio generation**: Verify samples are generated correctly
-- **CPU emulation**: Test 6510 instruction execution
+The test harness shims a `window` object. That means browser globals in hot paths
+compile and run under test while silently costing performance in the browser —
+don't reach for `window` inside per-instruction or per-pixel code.
 
-Run tests:
-```powershell
-.\dd.ps1 test
-```
+Covered: CPU instruction behaviour, C64 startup to the READY prompt, BASIC
+tokenizing and execution, PSID/RSID parsing, SID register writes and audio
+generation, CIA timer/NMI timing, and CRT cartridge loading.
 
-## Emulator Architecture
+To verify a change that only shows up visually, drive a real browser against
+`.\dd.ps1 run` and read the screen matrix out of `machine.ram[0x0400..]`. Those
+are *screen codes*, not PETSCII: 1-26 are A-Z, 32 is space, 34 is `"`.
 
-The C64 emulator uses a unified Bus interface architecture:
+Playwright's synthetic key events are not a faithful keyboard: `keyboard.type()`
+never sends the Shift keydown that a real layout needs for `*` or `"`, and
+`press('8')` with Shift held still reports `key: '8'`. To exercise the real path,
+dispatch `new KeyboardEvent('keydown', { key: '*' })` at the canvas while holding
+Shift. Remember to reload the page after editing a module — the browser caches it.
 
-```
-C64Emulator (UI layer)
-    ├── Web Audio API (ScriptProcessorNode)
-    ├── Canvas rendering (384x272)
-    └── Keyboard input handling
-           │
-           ▼
-C64Machine (Bus interface: read/write methods)
-    ├── MOS6510 CPU (cycle-exact 6502/6510)
-    ├── SID chip (MOS6581/MOS8580 audio)
-    ├── 64KB RAM
-    ├── ROM mapping (BASIC $A000, KERNAL $E000)
-    └── I/O mapping (VIC-II $D000, SID $D400, CIA $DC00)
-```
+## Conventions
 
-### Key Modules
+- PEP 8 for Python, Black-formatted. Descriptive names over clever one-liners.
+- ES6 modules with explicit imports/exports.
+- **No `console.log` on normal paths.** Loading any page should leave the console
+  empty, and so should ordinary interaction. `console.warn`/`console.error` are
+  for genuine failures; the only informational logs left report a dropped `.prg`
+  or `.crt`, which is a deliberate user action.
+- Comments say what the code cannot: an invariant, a hardware quirk, the reason
+  for a constant. Not a restatement of the next line.
 
-| Module | Purpose |
-|--------|---------|
-| `emulator.js` | C64Emulator UI - entry point for index.html (canvas, keyboard, audio) |
-| `sid-player.js` | SIDPlayer class - entry point for sid.html (SID file playback) |
-| `machine.js` | C64Machine (motherboard/Bus) + CLOCK_PAL/CLOCK_NTSC constants |
-| `mos6510.js` | Cycle-exact CPU accepting Bus interface |
-| `roms.js` | BASIC, KERNAL, and Character ROM data |
-| `sid.js` | SID chip emulation + DAC modeling |
-| `voice.js` | Voice, envelope generator, waveform generator |
-| `filter.js` | SID filter (6581/8580) + external filter |
-| `psid-driver.js` | PSID driver installation for SID playback |
-| `vic-ii.js` | VIC-II graphics rendering (all 5 display modes) |
-| `cartridge.js` | CRT cartridge format support with bank switching |
-| `editor.js` | Syntax-highlighted code editor for BASIC and Assembly |
+## UI layout
 
-## Development Setup
-
-```powershell
-# Create virtual environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# Install dependencies
-pip install -r web/requirements.txt
-pip install pytest py_mini_racer
-
-# Run locally
-.\dd.ps1 run
-```
-
-## UI/UX Design Philosophy
-
-### Two-Panel Workspace Layout
-
-All interactive screens follow a consistent **two-panel layout** pattern for a unified user experience:
+Every interactive screen is a two-panel workspace with reference material below:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  HEADER (navigation)                                            │
-├──────────────────────────┬──────────────────────────────────────┤
-│                          │                                      │
-│   PRIMARY PANEL (50%)    │      SECONDARY PANEL (50%)           │
-│   - Main visualization   │      - Controls & configuration      │
-│   - Interactive element  │      - Code editor / selector        │
-│   - Monitor display      │      - Real-time feedback            │
-│                          │                                      │
-│   (fills vertical space) │      (fills vertical space)          │
-│                          │                                      │
+┌──────────────────────────┬──────────────────────────────────────┐
+│  PRIMARY (50%)           │  SECONDARY (50%)                     │
+│  visualisation / screen  │  controls, editor, live feedback     │
 ├──────────────────────────┴──────────────────────────────────────┤
-│  INFORMATION SECTION (multi-column, scrollable)                 │
-│  - Reference documentation                                      │
-│  - Quick-start guides                                           │
-│  - Detailed explanations                                        │
+│  INFORMATION SECTION — reference docs, quick-start guides       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Screen Layouts
-
-| Route | Primary Panel | Secondary Panel | Info Section |
-|-------|--------------|-----------------|--------------|
-| `/` (BASIC) | C64 Emulator screen | BASIC code editor | BASIC Quick Start |
-| `/asm` | C64 Emulator + registers | Assembly editor | 6502 Quick Start |
+| Route | Primary | Secondary | Below |
+|-------|---------|-----------|-------|
+| `/` | C64 screen | BASIC editor | BASIC quick start |
+| `/asm` | C64 screen + registers | Assembly editor | 6502 quick start |
 | `/hardware` | Bus simulation canvas | Scenario controls + log | Chip reference cards |
-| `/memmap` | Banking controls | Memory map table (+ region details) | Memory regions guide |
-| `/sid` | Voice visualizer + filter | Song selector + registers | SID chip documentation |
+| `/memmap` | Banking controls | Memory map table | Memory regions guide |
+| `/sid` | Voice visualiser + filter | Song selector + registers | SID documentation |
 
-`/` and `/asm` use the emulator-specific `.c64-page` variant of this layout;
-`/hardware`, `/memmap` and `/sid` use `.workspace`. `/memmap` adds a third
+`/` and `/asm` use the emulator-specific `.c64-page` variant; `/hardware`,
+`/memmap` and `/sid` use `.workspace`. `/memmap` adds a third
 `.workspace-tertiary` column for region details.
 
-### CSS Classes
+Layout classes: `.workspace`, `.workspace-primary`, `.workspace-secondary`,
+`.panel-content`, `.panel-header`, `.panel-body`, `.panel-footer`,
+`.info-section-below`, `.info-columns`, `.info-column`.
 
-Use these unified layout classes for consistency:
+Panels sit side by side above 1024px and stack below it.
 
-```css
-.workspace              /* Main two-panel container (flex, fills height) */
-.workspace-primary      /* Left panel (flex: 1, 50%) */
-.workspace-secondary    /* Right panel (flex: 1, 50%) */
-.panel-content          /* Inner panel wrapper (border, padding) */
-.panel-header           /* Title and controls bar */
-.panel-body             /* Scrollable content area */
-.panel-footer           /* Controls below content */
-.info-section-below     /* Information section after workspace */
-.info-columns           /* Multi-column grid (auto-fit, min 300px) */
-.info-column            /* Single column in info grid */
-```
+### Design principles
 
-### Responsive Behavior
-
-- **Desktop (>1024px)**: Two panels side-by-side, 50/50 split
-- **Tablet/Mobile (<1024px)**: Panels stack vertically
-- **Information section**: Columns collapse to single column on narrow screens
-
-### Design Principles
-
-1. **Consistency**: Every screen follows the same layout pattern
-2. **Information Hierarchy**: Main interaction above, reference below
-3. **Responsive**: Works on all screen sizes
-4. **C64 Aesthetic**: Retro color palette (blue background, cyan/yellow accents)
-5. **Discoverability**: Quick-start guides always visible below main workspace
+1. **Consistency** — every screen follows the same pattern.
+2. **Hierarchy** — interact above, read below.
+3. **C64 aesthetic** — the CSS `:root` colours mirror the C64 palette; the
+   emulator's own `PALETTE` in `vic-ii.js` is the VICE table.
+4. **Discoverability** — quick-start guides are always visible, never hidden
+   behind a tab.
+5. **Accessible** — interactive canvases carry an `aria-label` and are focusable,
+   keyboard focus is always visible via `:focus-visible`, and animation respects
+   `prefers-reduced-motion`.
+6. **Lightweight** — no framework and no bundler. The only third-party runtime
+   code is Three.js, Google Sign-In and Google Fonts, all loaded straight from
+   the network. Keep it that way.
