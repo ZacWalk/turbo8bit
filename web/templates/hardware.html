@@ -203,18 +203,26 @@
         'chip-ram2': C64_CHIPS.RAM_4464
     };
     
+    const chipScenes = [];
+
     // Initialize all 3D chips on the chip cards
     Object.entries(chipConfigs).forEach(([containerId, config]) => {
         const container = document.getElementById(containerId);
         if (container) {
-            initChip3DScene(container, {
+            const scene = initChip3DScene(container, {
                 textureOptions: config.textureOptions,
                 chipOptions: config.chipOptions,
                 autoRotate: true,
                 autoRotateSpeed: 0.5,
                 cameraPosition: { x: 1.2, y: 1.0, z: 1.5 }
             });
+            chipScenes.push(scene);
         }
+    });
+
+    window.addEventListener('pagehide', event => {
+        // A back/forward-cache visit must keep its scenes usable on return.
+        if (!event.persisted) chipScenes.forEach(scene => scene.dispose());
     });
     
     // Pre-render chips for the 2D simulation canvas (Short Board 250469 layout)

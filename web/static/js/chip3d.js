@@ -38,9 +38,10 @@ const LOGO_IMAGE = '/static/mos.png';
 // @param {string} options.partNumber - Main part number (e.g., '6581', '6510')
 // @param {string} options.dateCode - Date code (e.g., '2483' for week 24, 1983)
 // @param {string} options.secondary - Optional secondary text line
+// @param {Function} onChange - Request a redraw when the logo finishes loading
 // @returns {THREE.CanvasTexture} The chip label texture
 //
-export function createChipTexture(options = {}) {
+export function createChipTexture(options = {}, onChange = null) {
     const {
         logo = 'MOS',
         partNumber = '6581',
@@ -58,6 +59,8 @@ export function createChipTexture(options = {}) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const texture = new THREE.CanvasTexture(canvas);
+    let resolveReady;
+    texture.userData.ready = new Promise(resolve => { resolveReady = resolve; });
 
     // Try to load logo image, fall back to text if not available
     const img = new Image();
@@ -80,6 +83,7 @@ export function createChipTexture(options = {}) {
         }
 
         texture.needsUpdate = true;
+        onChange?.();
     };
 
     // Function to draw text-based logo (fallback)
@@ -97,22 +101,24 @@ export function createChipTexture(options = {}) {
         const logoWidth = (img.width / img.height) * logoHeight;
         ctx.drawImage(img, (canvas.width - logoWidth) / 2, 30, logoWidth, logoHeight);
         drawChipText();
+        resolveReady();
     };
 
     img.onerror = () => {
         // Logo image not found, use text fallback
         drawTextLogo();
+        resolveReady();
     };
+
+    drawChipText();
 
     // Only MOS ships as artwork; every other brand falls back to a text logo.
     if (logo === 'MOS') {
         img.src = LOGO_IMAGE;
     } else {
         drawTextLogo();
+        resolveReady();
     }
-
-    // Draw initial text in case image loading takes time
-    drawChipText();
 
     return texture;
 }
@@ -286,6 +292,23 @@ export function createDIPChip(options = {}) {
     return chipGroup;
 }
 
+function disposeChipResources(chip) {
+    const geometries = new Set();
+    const materials = new Set();
+    const textures = new Set();
+    chip.traverse(node => {
+        if (node.geometry) geometries.add(node.geometry);
+        const nodeMaterials = Array.isArray(node.material) ? node.material : [node.material];
+        nodeMaterials.filter(Boolean).forEach(material => {
+            materials.add(material);
+            if (material.map) textures.add(material.map);
+        });
+    });
+    textures.forEach(texture => texture.dispose());
+    materials.forEach(material => material.dispose());
+    geometries.forEach(geometry => geometry.dispose());
+}
+
 //
 // Initialize a 3D chip scene in a container
 // @param {HTMLElement} container - DOM element to render into
@@ -326,8 +349,9 @@ export function initChip3DScene(container, options = {}) {
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.autoRotate = autoRotate;
+    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    controls.enableDamping = !motionPreference.matches;
+    controls.autoRotate = autoRotate && !motionPreference.matches;
     controls.autoRotateSpeed = autoRotateSpeed;
 
     // Lights
@@ -338,35 +362,77 @@ export function initChip3DScene(container, options = {}) {
     dirLight.position.set(5, 5, 5);
     scene.add(dirLight);
 
-    // Create chip texture and mesh
-    const texture = createChipTexture(textureOptions);
+    // Keep one pending frame at most. Static scenes wake for input or texture
+    // changes; decorative animation sleeps outside the viewport or hidden tab.
+    let animationId = null;
+    let disposed = false;
+    let visible = typeof IntersectionObserver === 'undefined';
+    let updatingControls = false;
+
+    function requestRender() {
+        if (disposed || !visible || document.hidden || animationId !== null) return;
+        animationId = requestAnimationFrame(renderFrame);
+    }
+
+    function cancelRender() {
+        if (animationId !== null) cancelAnimationFrame(animationId);
+        animationId = null;
+    }
+
+    function renderFrame() {
+        animationId = null;
+        if (disposed || !visible || document.hidden) return;
+        updatingControls = true;
+        const changed = controls.update();
+        updatingControls = false;
+        renderer.render(scene, camera);
+        if (controls.autoRotate || (controls.enableDamping && changed)) requestRender();
+    }
+
+    function onControlsChange() {
+        // update() emits its own change event; this frame already draws it.
+        if (!updatingControls) requestRender();
+    }
+
+    function onVisibilityChange() {
+        if (!visible || document.hidden) cancelRender();
+        else requestRender();
+    }
+
+    function onMotionChange() {
+        controls.autoRotate = autoRotate && !motionPreference.matches;
+        controls.enableDamping = !motionPreference.matches;
+        cancelRender();
+        requestRender();
+    }
+
+    const texture = createChipTexture(textureOptions, requestRender);
     const chip = createDIPChip({ ...chipOptions, texture });
     scene.add(chip);
 
-    // Animation
-    let animationId = null;
-    let isRunning = true;
-
-    function animate() {
-        if (!isRunning) return;
-        animationId = requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
-    }
-
     // Handle resize
     function onResize() {
+        if (disposed) return;
         const newWidth = container.clientWidth || 300;
         const newHeight = container.clientHeight || 300;
         camera.aspect = newWidth / newHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(newWidth, newHeight);
+        requestRender();
     }
 
+    const observer = typeof IntersectionObserver === 'undefined' ? null
+        : new IntersectionObserver(([entry]) => {
+            visible = entry.isIntersecting;
+            onVisibilityChange();
+        });
+    observer?.observe(container);
+    controls.addEventListener('change', onControlsChange);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    motionPreference.addEventListener('change', onMotionChange);
     window.addEventListener('resize', onResize);
 
-    // Start animation
-    animate();
+    requestRender();
 
     // Return controller
     return {
@@ -378,26 +444,33 @@ export function initChip3DScene(container, options = {}) {
 
         // Stop animation and clean up
         dispose() {
-            isRunning = false;
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-            }
+            if (disposed) return;
+            disposed = true;
+            cancelRender();
+            observer?.disconnect();
+            controls.removeEventListener('change', onControlsChange);
+            controls.dispose();
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            motionPreference.removeEventListener('change', onMotionChange);
             window.removeEventListener('resize', onResize);
+            disposeChipResources(chip);
             renderer.dispose();
-            container.removeChild(renderer.domElement);
+            renderer.forceContextLoss();
+            if (renderer.domElement.parentNode === container) {
+                container.removeChild(renderer.domElement);
+            }
         },
 
         // Update chip texture
         updateTexture(newTextureOptions) {
-            const newTexture = createChipTexture(newTextureOptions);
-            // Update the top material
-            if (chip.children[0] && chip.children[0].material) {
-                const materials = chip.children[0].material;
-                if (Array.isArray(materials)) {
-                    materials[2].map = newTexture;
-                    materials[2].needsUpdate = true;
-                }
-            }
+            if (disposed) return;
+            const material = chip.children[0]?.material?.[2];
+            if (!material) return;
+            const previousTexture = material.map;
+            material.map = createChipTexture(newTextureOptions, requestRender);
+            material.needsUpdate = true;
+            previousTexture?.dispose();
+            requestRender();
         }
     };
 }
@@ -455,17 +528,16 @@ export async function renderChipToImage(options = {}) {
     chip.rotation.y = rotationY;
     scene.add(chip);
 
-    // Wait for texture to load (logo image)
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Render
-    renderer.render(scene, camera);
-
-    // Get image data
-    const dataURL = renderer.domElement.toDataURL('image/png');
-
-    // Cleanup
-    renderer.dispose();
+    let dataURL;
+    try {
+        await texture.userData.ready;
+        renderer.render(scene, camera);
+        dataURL = renderer.domElement.toDataURL('image/png');
+    } finally {
+        disposeChipResources(chip);
+        renderer.dispose();
+        renderer.forceContextLoss();
+    }
 
     // Return as Image element
     return new Promise((resolve, reject) => {

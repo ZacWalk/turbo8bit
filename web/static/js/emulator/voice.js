@@ -357,6 +357,9 @@ const FLOATING_OUTPUT_TTL_8580R5 = 800000;
 const SHIFT_REGISTER_RESET_6581R3 = 50000;
 const SHIFT_REGISTER_RESET_8580R5 = 986000;
 
+// Triangle+saw, pulse+triangle, pulse+saw, pulse+triangle+saw, and pulse+noise.
+const PULLDOWN_TABLE_INDEX = [-1, -1, -1, 0, -1, 1, 2, 3, -1, -1, -1, 0, 4, 1, 2, 3];
+
 export class WaveformGenerator {
     constructor() {
         this.modelWave = null;
@@ -392,18 +395,18 @@ export class WaveformGenerator {
 
     setWaveformModels(models) {
         this.modelWave = models;
-        if (this.waveform < models.length) {
-            this.wave = models[this.waveform];
-        }
+        this.updateWaveformTables();
     }
 
     setPulldownModels(models) {
         this.modelPulldown = models;
-        if (models && this.waveform >= 3 && this.waveform < models.length + 3) {
-            this.pulldown = models[this.waveform - 3];
-        } else {
-            this.pulldown = null;
-        }
+        this.updateWaveformTables();
+    }
+
+    updateWaveformTables() {
+        this.wave = this.modelWave ? this.modelWave[this.waveform & 3] : null;
+        const index = PULLDOWN_TABLE_INDEX[this.waveform];
+        this.pulldown = this.modelPulldown && index >= 0 ? this.modelPulldown[index] : null;
     }
 
     setOtherWaveforms(prev, next) {
@@ -482,13 +485,13 @@ export class WaveformGenerator {
                 this.noNoiseOrNoiseOutput;
 
             if (this.pulldown !== null) {
-                this.waveformOutput = this.pulldown[this.waveformOutput] || this.waveformOutput;
+                this.waveformOutput = this.pulldown[this.waveformOutput];
             }
 
             if ((this.waveform & 3) && !this.is6581) {
                 this.osc3 = this.triSawPipeline & (this.noPulse | this.pulseOutput) & this.noNoiseOrNoiseOutput;
                 if (this.pulldown !== null) {
-                    this.osc3 = this.pulldown[this.osc3] || this.osc3;
+                    this.osc3 = this.pulldown[this.osc3];
                 }
                 this.triSawPipeline = this.wave ? this.wave[ix] : 0;
             } else {
@@ -580,20 +583,9 @@ export class WaveformGenerator {
         const waveformOld = this.waveform;
         const waveformNew = (control >> 4) & 0x0f;
         this.waveform = waveformNew;
+        this.updateWaveformTables();
 
-        if (this.modelWave && waveformNew < this.modelWave.length) {
-            this.wave = this.modelWave[waveformNew];
-        }
-
-        if (this.modelPulldown && waveformNew >= 3) {
-            const pulldownIdx = waveformNew - 3;
-            this.pulldown = pulldownIdx < this.modelPulldown.length ?
-                this.modelPulldown[pulldownIdx] : null;
-        } else {
-            this.pulldown = null;
-        }
-
-        this.ringMsbMask = (control & 0x04) ? 0x800000 : 0;
+        this.ringMsbMask = (control & 0x04) && (waveformNew & 3) === 1 ? 0x800000 : 0;
         this.sync = (control & 0x02) !== 0;
         const testOld = this.test;
         this.test = (control & 0x08) !== 0;
@@ -606,11 +598,7 @@ export class WaveformGenerator {
             this.setNoNoiseOrNoiseOutput();
         }
 
-        if (waveformNew >= 4 && waveformNew < 8) {
-            this.noPulse = 0;
-        } else {
-            this.noPulse = 0xfff;
-        }
+        this.noPulse = (waveformNew & 4) ? 0 : 0xfff;
 
         if (!testOld && this.test) {
             this.accumulator = 0;

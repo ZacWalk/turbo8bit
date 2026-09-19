@@ -74,17 +74,17 @@ export class CodeEditor {
         const isAsm = this.options.language === 'asm';
         const toolbarButtons = isAsm ? `
             <button class="editor-btn run-btn" title="Assemble and Run">
-                <span class="btn-icon">▶</span> Run
+                <span class="btn-icon" aria-hidden="true">▶</span> Run
             </button>
             <button class="editor-btn step-btn" title="Step one instruction">
-                <span class="btn-icon">⏭</span> Step
+                <span class="btn-icon" aria-hidden="true">⏭</span> Step
             </button>
             <button class="editor-btn stop-btn" title="Stop execution">
-                <span class="btn-icon">⏹</span> Stop
+                <span class="btn-icon" aria-hidden="true">⏹</span> Stop
             </button>
         ` : `
             <button class="editor-btn load-btn" title="Load and Run">
-                <span class="btn-icon">▶</span> Run
+                <span class="btn-icon" aria-hidden="true">▶</span> Run
             </button>
         `;
 
@@ -92,8 +92,8 @@ export class CodeEditor {
             <div class="editor-toolbar">
                 <div class="toolbar-left">
                     <div class="search-container">
-                        <input type="text" class="search-input" placeholder="Search..." title="F3 to search, Ctrl+F3 to search selection">
-                        <button class="search-btn" title="Find next (F3)">🔍</button>
+                        <input type="text" class="search-input" aria-label="Search code" placeholder="Search..." title="F3 to search, Ctrl+F3 to search selection">
+                        <button class="search-btn" aria-label="Find next" title="Find next (F3)">🔍</button>
                     </div>
                 </div>
                 <div class="toolbar-right">
@@ -101,10 +101,10 @@ export class CodeEditor {
                 </div>
             </div>
             <div class="editor-container">
-                <div class="line-numbers"></div>
+                <div class="line-numbers" aria-hidden="true"></div>
                 <div class="editor-wrapper">
-                    <textarea class="editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
-                    <div class="editor-highlight"></div>
+                    <textarea class="editor-textarea" aria-label="${isAsm ? 'Assembly code editor' : 'BASIC code editor'}" title="Tab to indent, Shift+Tab to leave the editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                    <div class="editor-highlight" aria-hidden="true"></div>
                 </div>
             </div>
             <div class="editor-status">
@@ -153,7 +153,7 @@ export class CodeEditor {
     // @private
     //
     bindEvents() {
-        // Text input handling
+        // Leave paste native: the textarea normalizes line endings and retains undo.
         this.textarea.addEventListener('input', () => {
             this.value = this.textarea.value;
             this.updateHighlight();
@@ -182,7 +182,7 @@ export class CodeEditor {
 
         // Handle tab key and search shortcuts
         this.textarea.addEventListener('keydown', (e) => {
-            if (e.key === 'Tab') {
+            if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 this.insertText(' '.repeat(this.options.tabSize));
             }
@@ -263,13 +263,6 @@ export class CodeEditor {
             });
         }
 
-        // Handle paste (normalize line endings)
-        this.textarea.addEventListener('paste', (e) => {
-            e.preventDefault();
-            const text = (e.clipboardData || window.clipboardData).getData('text');
-            const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            this.insertText(normalized);
-        });
     }
 
     //
@@ -353,22 +346,10 @@ export class CodeEditor {
     // @param {string} text - Text to insert
     //
     insertText(text) {
-        const start = this.textarea.selectionStart;
-        const end = this.textarea.selectionEnd;
-        const before = this.textarea.value.substring(0, start);
-        const after = this.textarea.value.substring(end);
-
-        this.textarea.value = before + text + after;
-        this.textarea.selectionStart = this.textarea.selectionEnd = start + text.length;
-
-        this.value = this.textarea.value;
-        this.updateHighlight();
-        this.updateLineNumbers();
-        this.validateCode();
-
-        if (this.options.onChange) {
-            this.options.onChange(this.value);
-        }
+        this.textarea.focus();
+        // Unlike assigning value or setRangeText(), this preserves native undo
+        // and emits the input event that updates highlighting and onChange.
+        document.execCommand('insertText', false, text);
     }
 
     //
@@ -547,6 +528,7 @@ export class CodeEditor {
     //
     setLanguage(lang) {
         this.options.language = lang;
+        this.textarea.setAttribute('aria-label', lang === 'asm' ? 'Assembly code editor' : 'BASIC code editor');
         this.updateHighlight();
         this.validateCode();
     }

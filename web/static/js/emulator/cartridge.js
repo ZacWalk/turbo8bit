@@ -395,7 +395,7 @@ export class Cartridge {
         const config = this.getMemoryConfig();
 
         // Check ROML range ($8000-$9FFF)
-        if (this.romlBank && addr >= 0x8000 && addr <= 0x9FFF) {
+        if (config.romlAddr !== null && this.romlBank && addr >= 0x8000 && addr <= 0x9FFF) {
             const offset = addr - 0x8000;
             if (offset < this.romlBank.size) {
                 return this.romlBank.data[offset];
@@ -586,26 +586,14 @@ export class Cartridge {
                     this.currentBank = value & 0x3F;
                     this.updateBankMapping();
                 } else if (addr === 0xDE02) {
-                    // Control register:
-                    // Bit 0: GAME line (active low - 0 = active/asserted, 1 = inactive/high)
-                    // Bit 1: EXROM line (active low - 0 = active/asserted, 1 = inactive/high)
-                    // Bit 2: Mode (0 = boot mode with GAME/EXROM active, 1 = software controlled)
-                    // Bit 7: LED (optional, ignored)
+                    // Bits 0/1 assert GAME/EXROM when set. Bit 2 selects
+                    // software GAME control instead of the boot jumper.
                     this.easyFlashControl = value;
-
-                    // In EasyFlash boot mode (jumper + mode=0), the cartridge starts
-                    // When mode bit is 1, use GAME/EXROM from control register
-                    if (value & 0x04) {  // Mode bit (note: some docs say bit 2, others bit 7)
-                        // Mode bit set: use software control of /GAME and /EXROM
-                        this.game = (value & 0x01) ? 0 : 1;     // Bit 0: /GAME (active low, so 0=asserted=0, 1=released=1)
-                        this.exrom = (value & 0x02) ? 0 : 1;    // Bit 1: /EXROM
-                        this.ultimaxMode = (this.exrom === 0 && this.game === 1);
-                    } else {
-                        // Boot mode: cartridge active (16K mode)
-                        this.game = 0;
-                        this.exrom = 0;
-                        this.ultimaxMode = false;
-                    }
+                    this.game = (value & 0x04)
+                        ? ((value & 0x01) ? 0 : 1)
+                        : (this.easyFlashJumper ? 0 : 1);
+                    this.exrom = (value & 0x02) ? 0 : 1;
+                    this.ultimaxMode = this.exrom === 1 && this.game === 0;
                     this.updateBankMapping();
                 } else if (addr >= 0xDF00 && addr <= 0xDFFF) {
                     // EasyFlash RAM write
@@ -626,15 +614,15 @@ export class Cartridge {
     // @param {number} addr - Address being read
     // @returns {number|null} Value to return, or null for normal read
     //
-    readIO(addr) {
+    readIO(addr, sideEffects = true) {
         if (!this.enabled) return null;
 
         switch (this.hardwareType) {
             case CARTRIDGE_TYPE.C64_GAME_SYSTEM:
             case CARTRIDGE_TYPE.DINAMIC:
                 // Bank switching via read access
-                if (addr >= 0xDE00 && addr <= 0xDEFF) {
-                    this.currentBank = addr & 0x3F;
+                if (sideEffects && addr >= 0xDE00 && addr <= 0xDEFF) {
+                    this.currentBank = addr & (this.hardwareType === CARTRIDGE_TYPE.DINAMIC ? 0x0F : 0x3F);
                     this.updateBankMapping();
                 }
                 return 0;  // Return dummy value
@@ -655,11 +643,13 @@ export class Cartridge {
                 break;
 
             case CARTRIDGE_TYPE.ROSS:
-                if (addr >= 0xDE00 && addr <= 0xDEFF) {
-                    this.currentBank = 1;
-                    this.updateBankMapping();
-                } else if (addr >= 0xDF00 && addr <= 0xDFFF) {
-                    this.enabled = false;
+                if (sideEffects) {
+                    if (addr >= 0xDE00 && addr <= 0xDEFF) {
+                        this.currentBank = 1;
+                        this.updateBankMapping();
+                    } else if (addr >= 0xDF00 && addr <= 0xDFFF) {
+                        this.enabled = false;
+                    }
                 }
                 return 0;
 

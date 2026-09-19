@@ -198,9 +198,10 @@
                 
                 <!-- Player Controls -->
                 <div class="player-controls-horizontal">
-                    <button class="player-btn play-btn" id="btn-play" title="Play or stop the current track">▶ PLAY</button>
-                    <button class="player-btn" id="btn-restart" title="Play the current track from the beginning">↺ RESTART</button>
+                    <button class="player-btn play-btn" id="btn-play" aria-pressed="false" disabled title="Play or stop the current track">▶ PLAY</button>
+                    <button class="player-btn" id="btn-restart" disabled title="Play the current track from the beginning">↺ RESTART</button>
                 </div>
+                <p id="player-status" class="c64-status" role="status"></p>
                 <div class="frame-counter" id="frame-counter">Frame: 0 | 0:00</div>
             </div>
         </div>
@@ -265,6 +266,11 @@
     let player = null;
     let animationId = null;
     let isPlaying = false;
+    let isLoading = false;
+    let isStarting = false;
+    let hasTune = false;
+    let playRequest = 0;
+    const playerStatus = document.getElementById('player-status');
 
     const PLAY_LABEL = '\u25b6 PLAY';
     const STOP_LABEL = '\u25a0 STOP';
@@ -274,6 +280,29 @@
         const btn = document.getElementById('btn-play');
         btn.textContent = playing ? STOP_LABEL : PLAY_LABEL;
         btn.classList.toggle('playing', playing);
+        btn.setAttribute('aria-pressed', String(playing));
+    }
+
+    function updateControls() {
+        const busy = isLoading || isStarting;
+        document.getElementById('btn-play').disabled = isLoading || !hasTune;
+        document.getElementById('btn-restart').disabled = busy || !hasTune;
+        document.querySelectorAll('.sid-btn, .track-btn').forEach(button => {
+            button.disabled = busy;
+        });
+    }
+
+    function stopPlayback() {
+        playRequest++;
+        player.stop();
+        isPlaying = false;
+        isStarting = false;
+        setPlayButton(false);
+        if (animationId !== null) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+        updateControls();
     }
     
     // Register names for display (all 29 SID registers: $D400-$D41C)
@@ -469,38 +498,43 @@
             btn.className = 'track-btn' + (i === state.currentSong ? ' active' : '');
             btn.textContent = i;
             btn.title = `Track ${i}`;
+            btn.setAttribute('aria-pressed', String(i === state.currentSong));
             btn.addEventListener('click', () => selectTrack(i));
             container.appendChild(btn);
         }
     }
     
     // Select a specific track
-    function selectTrack(trackNum) {
-        if (!player) return;
-        player.changeTrack(trackNum - 1);  // 0-based
-        updateTrackSelector();
-        
-        // If playing, restart with new track
-        if (isPlaying) {
-            player.play();
+    async function selectTrack(trackNum, playAfterChange = isPlaying) {
+        if (!player || !hasTune || isLoading || isStarting) return;
+        try {
+            player.changeTrack(trackNum - 1);  // 0-based; successful changes leave playback stopped.
+            stopPlayback();
+            updateTrackSelector();
+            playerStatus.textContent = '';
+            updateVisualization();
+            if (playAfterChange) await togglePlay();
+        } catch (error) {
+            console.error('Track change failed:', error);
+            playerStatus.textContent = 'The track could not be changed. Try another track.';
         }
     }
     
     // Load a SID file by URL
     async function loadSong(url) {
+        if (isLoading || isStarting) return false;
+        isLoading = true;
+        hasTune = false;
+        playerStatus.textContent = 'Loading SID file...';
+        updateControls();
         // Stop current playback and clean up audio state
         if (isPlaying) {
-            player.stop();
-            isPlaying = false;
-            setPlayButton(false);
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-                animationId = null;
-            }
+            stopPlayback();
         }
         
         try {
             await player.load(url);
+            hasTune = true;
             
             // Reset frame counter display
             const frameCounterEl = document.getElementById('frame-counter');
@@ -514,9 +548,20 @@
             
             // Update track selector
             updateTrackSelector();
+            playerStatus.textContent = '';
+            updateVisualization();
+            return true;
         } catch (e) {
             console.error('Failed to load SID file:', e);
             document.getElementById('song-title').textContent = 'Load Error';
+            document.getElementById('song-author').textContent = '';
+            document.getElementById('song-released').textContent = '';
+            document.getElementById('track-selector').replaceChildren();
+            playerStatus.textContent = 'The SID file could not be loaded. Select a song to try again.';
+            return false;
+        } finally {
+            isLoading = false;
+            updateControls();
         }
     }
     
@@ -524,17 +569,18 @@
     async function onSidButtonClick(event) {
         const btn = event.target;
         if (!btn.classList.contains('sid-btn')) return;
+        if (isLoading || isStarting) return;
         
         // Update active state
         document.querySelectorAll('.sid-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         
         // Load the SID and auto-play
-        await loadSong(btn.dataset.url);
+        const loaded = await loadSong(btn.dataset.url);
         
         // Auto-play after loading
-        if (!isPlaying) {
-            togglePlay();
+        if (loaded && !isPlaying) {
+            await togglePlay();
         }
     }
     
@@ -544,6 +590,7 @@
         // time DOMContentLoaded fires.
         if (typeof SIDPlayer === 'undefined') {
             console.error('SIDPlayer not available; check that sid-player.js loaded.');
+            playerStatus.textContent = 'The SID player could not load. Reload the page to try again.';
             return;
         }
         
@@ -557,59 +604,53 @@
             }
         } catch (e) {
             console.error('Failed to initialize SIDPlayer:', e);
+            playerStatus.textContent = 'The SID player could not start. Reload the page to try again.';
         }
     }
     
     // Play button handler
     async function togglePlay() {
-        if (!player) {
-            console.error('No player!');
-            return;
-        }
-        
-        const btn = document.getElementById('btn-play');
-        
-        // Prevent double-clicks while loading
-        if (btn.disabled) return;
-        
-        if (isPlaying) {
-            player.stop();
-            isPlaying = false;
-            setPlayButton(false);
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-            }
+        if (!player || !hasTune || isLoading) return;
+
+        if (isPlaying || isStarting) {
+            stopPlayback();
+            playerStatus.textContent = '';
         } else {
-            // Disable button while loading
-            btn.disabled = true;
-            btn.style.opacity = '0.5';
-            btn.style.cursor = 'wait';
+            const request = ++playRequest;
+            isStarting = true;
+            setPlayButton(true);
+            updateControls();
+            playerStatus.textContent = 'Starting audio...';
             
             try {
                 await player.play();
+                if (request !== playRequest) return;
                 isPlaying = true;
-                setPlayButton(true);
+                playerStatus.textContent = '';
                 updateVisualization();
             } catch (e) {
+                if (request !== playRequest) return;
+                stopPlayback();
+                if (e.name === 'AbortError') {
+                    playerStatus.textContent = '';
+                    return;
+                }
                 console.error('Playback failed:', e);
+                playerStatus.textContent = 'Playback could not start. Check your audio device and try again.';
             } finally {
-                // Re-enable button
-                btn.disabled = false;
-                btn.style.opacity = '';
-                btn.style.cursor = '';
+                if (request === playRequest) {
+                    isStarting = false;
+                    updateControls();
+                }
             }
         }
     }
     
     // Restart current track from the beginning, playing it if it was stopped
     async function restartTrack() {
-        if (!player) return;
+        if (!player || !hasTune || isLoading || isStarting) return;
         const state = player.getState();
-        player.changeTrack(state.currentSong - 1);
-        updateTrackSelector();
-        if (!isPlaying) {
-            await togglePlay();
-        }
+        await selectTrack(state.currentSong, true);
     }
     
     // Initialize when player module is ready

@@ -213,7 +213,7 @@ function testSidAudioGeneration(sidData, frames) {
         
         for (var frame = 0; frame < frames; frame++) {
             machine.runFrame(audioBuffer);
-            var generated = machine.generateAudio(audioBuffer);
+            var generated = machine.audioSamplesGenerated;
             totalSamples += generated;
             
             for (var i = 0; i < generated; i++) {
@@ -638,7 +638,7 @@ function testC64MachineSidPlayback(sidData, frames) {
         
         for (var frame = 0; frame < frames; frame++) {
             machine.runFrame(audioBuffer);
-            var samplesThisFrame = machine.generateAudio(audioBuffer);
+            var samplesThisFrame = machine.audioSamplesGenerated;
             totalSamples += samplesThisFrame;
             
             for (var i = 0; i < samplesThisFrame; i++) {
@@ -751,9 +751,9 @@ function testSidRegisterWriteViaIO() {
     machine.write(sidBase + 6, 0xA0);  // Sustain/Release
     machine.write(sidBase + 4, 0x11);  // Triangle + gate
     
-    var buffer = new Int16Array(100);
-    machine.runFrame();
-    var samplesGenerated = machine.generateAudio(buffer);
+    var buffer = new Int16Array(4096);
+    machine.runFrame(buffer);
+    var samplesGenerated = machine.audioSamplesGenerated;
     
     var hasSound = false;
     for (var i = 0; i < samplesGenerated; i++) {

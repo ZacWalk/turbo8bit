@@ -16,31 +16,31 @@
                 <div class="control-group">
                     <h3>CPU PORT ($01)</h3>
                     <div class="bit-controls">
-                        <button class="bit-btn active" data-bit="loram" title="LORAM - BASIC ROM visible">
+                        <button class="bit-btn active" data-bit="loram" aria-pressed="true" title="LORAM - BASIC requires both LORAM and HIRAM">
                             <span class="bit-value">1</span>
                             <span class="bit-name">LORAM</span>
                         </button>
-                        <button class="bit-btn active" data-bit="hiram" title="HIRAM - KERNAL ROM visible">
+                        <button class="bit-btn active" data-bit="hiram" aria-pressed="true" title="HIRAM - KERNAL ROM visible">
                             <span class="bit-value">1</span>
                             <span class="bit-name">HIRAM</span>
                         </button>
-                        <button class="bit-btn active" data-bit="charen" title="CHAREN - I/O or Char ROM">
+                        <button class="bit-btn active" data-bit="charen" aria-pressed="true" title="CHAREN - I/O or Char ROM">
                             <span class="bit-value">1</span>
                             <span class="bit-name">CHAREN</span>
                         </button>
                     </div>
                     <div class="port-value">
-                        $01 = <code id="port-value">$37</code> (default)
+                        $01 = <code id="port-value">$37</code> (default: $37)
                     </div>
                 </div>
                 
                 <div class="control-group">
                     <h3>CARTRIDGE SIGNALS</h3>
                     <div class="signal-controls">
-                        <button class="signal-btn" data-signal="game" title="Active LOW - typically active">
+                        <button class="signal-btn" data-signal="game" aria-pressed="false" title="Pull /GAME LOW; pressed means asserted">
                             /GAME
                         </button>
-                        <button class="signal-btn" data-signal="exrom" title="Active LOW - cartridge ROM at $8000">
+                        <button class="signal-btn" data-signal="exrom" aria-pressed="false" title="Pull /EXROM LOW; pressed means asserted">
                             /EXROM
                         </button>
                     </div>
@@ -49,22 +49,22 @@
                 <div class="control-group">
                     <h3>QUICK PRESETS</h3>
                     <div class="presets">
-                        <button class="preset-btn active" data-preset="default">
+                        <button class="preset-btn active" data-preset="default" aria-pressed="true">
                             DEFAULT ($37) - Normal BASIC
                         </button>
-                        <button class="preset-btn" data-preset="allram">
+                        <button class="preset-btn" data-preset="allram" aria-pressed="false">
                             ALL RAM ($30) - 64K RAM
                         </button>
-                        <button class="preset-btn" data-preset="nobasic">
+                        <button class="preset-btn" data-preset="nobasic" aria-pressed="false">
                             NO BASIC ($36) - Games
                         </button>
-                        <button class="preset-btn" data-preset="nokernal">
+                        <button class="preset-btn" data-preset="nokernal" aria-pressed="false">
                             NO KERNAL ($35) - Expert
                         </button>
-                        <button class="preset-btn" data-preset="charrom">
+                        <button class="preset-btn" data-preset="charrom" aria-pressed="false">
                             CHAR ROM ($33) - Read chars
                         </button>
-                        <button class="preset-btn" data-preset="ultimax">
+                        <button class="preset-btn" data-preset="ultimax" aria-pressed="false">
                             ULTIMAX - Cartridge mode
                         </button>
                     </div>
@@ -73,19 +73,19 @@
                 <div class="control-group">
                     <h3>VIC-II BANK ($DD00)</h3>
                     <div class="vic-bank-controls">
-                        <button class="vic-bank-btn active" data-bank="0" title="Bank 0: $0000-$3FFF">
+                        <button class="vic-bank-btn active" data-bank="0" aria-pressed="true" title="Bank 0: $0000-$3FFF">
                             <span class="bank-num">0</span>
                             <span class="bank-range">$0000</span>
                         </button>
-                        <button class="vic-bank-btn" data-bank="1" title="Bank 1: $4000-$7FFF">
+                        <button class="vic-bank-btn" data-bank="1" aria-pressed="false" title="Bank 1: $4000-$7FFF">
                             <span class="bank-num">1</span>
                             <span class="bank-range">$4000</span>
                         </button>
-                        <button class="vic-bank-btn" data-bank="2" title="Bank 2: $8000-$BFFF">
+                        <button class="vic-bank-btn" data-bank="2" aria-pressed="false" title="Bank 2: $8000-$BFFF">
                             <span class="bank-num">2</span>
                             <span class="bank-range">$8000</span>
                         </button>
-                        <button class="vic-bank-btn" data-bank="3" title="Bank 3: $C000-$FFFF">
+                        <button class="vic-bank-btn" data-bank="3" aria-pressed="false" title="Bank 3: $C000-$FFFF">
                             <span class="bank-num">3</span>
                             <span class="bank-range">$C000</span>
                         </button>
@@ -116,6 +116,9 @@
                     </div>
                     <div class="legend-item">
                         <span class="legend-color" style="background: #4a5a2d;"></span> CART-HI
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color region-unmapped"></span> UNMAPPED
                     </div>
                 </div>
                 
@@ -152,13 +155,13 @@
         <div class="panel-content">
             <div class="panel-header">
                 <h2>REGION DETAILS</h2>
-                <p class="panel-subtitle">Hover over memory cells to see details here.</p>
+                <p class="panel-subtitle">Focus, click or hover over memory cells for details. Keys 1, 2 and 3 toggle LORAM, HIRAM and CHAREN.</p>
             </div>
             <div class="panel-body region-details-body">
-                <div class="region-details-panel">
+                <div class="region-details-panel" aria-live="polite">
                     <div class="region-info active" id="info-entry-details">
                         <h4 id="entry-name">Memory Map</h4>
-                        <div class="range" id="entry-address">Hover over cells for details</div>
+                        <div class="range" id="entry-address">Focus, click or hover over cells for details</div>
                         <p id="entry-description">The cells on the right of each memory region show documented memory locations from "Mapping the Commodore 64".</p>
                         <p id="entry-title" style="color: var(--c64-yellow); display: none;"></p>
                         <div class="details" id="entry-bits-container" style="display: none;">
@@ -181,7 +184,7 @@
 <!-- Information Section Below -->
 <div class="info-section-below memmap-info">
     <h2>MEMORY REGIONS REFERENCE</h2>
-    <p>The C64's 64KB address space is divided into distinct regions, each with specific purposes and banking behavior.</p>
+    <p>The CPU column shows read mappings. ROM writes usually reach the RAM underneath; I/O accesses reach devices. Cartridge hardware can change write behavior. The following describes the normal configuration without a cartridge.</p>
     
     <div class="info-columns">
         <div class="info-column">
@@ -192,21 +195,21 @@
         
         <div class="info-column">
             <h3>BASIC Program Area</h3>
-            <p><strong>$0200-$9FFF:</strong> Main RAM - This ~39KB area holds BASIC programs, variables, and data. Always visible to the CPU.</p>
-            <p><strong>$0400-$07FF:</strong> Default screen memory (1000 bytes + color RAM mirror).</p>
+            <p><strong>$0200-$9FFF:</strong> Main RAM - System workspaces, BASIC programs, variables, and data. Cartridge modes can replace or disconnect parts of this area.</p>
+            <p><strong>$0400-$07FF:</strong> Default screen block: 1000 screen codes and sprite pointers at $07F8-$07FF. Color RAM is separate, at $D800.</p>
             <p><strong>$0801:</strong> Start of BASIC text - where programs are stored.</p>
         </div>
         
         <div class="info-column">
             <h3>ROM Areas</h3>
-            <p><strong>$A000-$BFFF:</strong> BASIC ROM (8KB) - Contains the BASIC V2 interpreter. Controlled by LORAM bit.</p>
+            <p><strong>$A000-$BFFF:</strong> BASIC ROM (8KB) - Contains the BASIC V2 interpreter. Requires both LORAM and HIRAM.</p>
             <p><strong>$E000-$FFFF:</strong> KERNAL ROM (8KB) - The operating system with I/O routines and interrupt handlers. Controlled by HIRAM bit.</p>
         </div>
         
         <div class="info-column">
             <h3>I/O & Character ROM</h3>
             <p><strong>$D000-$DFFF:</strong> I/O Area - VIC-II ($D000), SID ($D400), Color RAM ($D800), CIA 1 ($DC00), CIA 2 ($DD00).</p>
-            <p>When CHAREN=0, Character ROM appears here instead of I/O registers.</p>
+            <p>With LORAM or HIRAM high, CHAREN selects I/O (1) or character ROM (0). With both low, RAM is visible. Cartridge modes modify these rules; Ultimax leaves I/O visible and disconnects RAM in its unmapped regions.</p>
         </div>
     </div>
 </div>

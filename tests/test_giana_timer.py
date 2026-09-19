@@ -26,18 +26,19 @@ def test_giana_timer_setup():
     print("\n" + "=" * 70)
     print("Test: Giana Sisters Timer Setup Analysis")
     print("=" * 70)
-    
+
     sid_path = SID_DIR / "Great_Giana_Sisters.sid"
     if not sid_path.exists():
-        print(f"  ⚠ File not found: {sid_path}")
-        return False
-    
+        raise AssertionError(f"SID fixture not found: {sid_path}")
+
     ctx = create_player_context()
     sid_bytes = load_sid_file(sid_path)
     ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-    
+
     # First, parse and show the tune info
-    tune_info = eval_json(ctx, """
+    tune_info = eval_json(
+        ctx,
+        """
         (function() {
             var buffer = new Uint8Array(sidBytes).buffer;
             var info = parseSidFile(buffer);
@@ -53,20 +54,23 @@ def test_giana_timer_setup():
                 speed: info.speed
             };
         })()
-    """)
-    
+    """,
+    )
+
     print(f"\n  File Type: {tune_info['magic']} (isRSID: {tune_info['isRSID']})")
     print(f"  Name: {tune_info['name']}")
     print(f"  Load: ${tune_info['loadAddress']:04X}")
     print(f"  Init: ${tune_info['initAddress']:04X}")
     print(f"  Play: ${tune_info['playAddress']:04X}")
     print(f"  Speed: 0x{tune_info['speed']:08X}")
-    
-    if tune_info['playAddress'] == 0:
+
+    if tune_info["playAddress"] == 0:
         print("\n  NOTE: playAddress=0 means the tune sets up its own IRQ handler")
-    
+
     # Check what the PSID driver generates
-    driver_info = eval_json(ctx, """
+    driver_info = eval_json(
+        ctx,
+        """
         (function() {
             var buffer = new Uint8Array(sidBytes).buffer;
             var tune = parseSidFile(buffer);
@@ -80,16 +84,19 @@ def test_giana_timer_setup():
                 playIoMap: driver.debug.playIoMap
             };
         })()
-    """)
-    
+    """,
+    )
+
     print(f"\n  PSID Driver Config:")
     print(f"    useCIA: {driver_info['useCIA']}")
     print(f"    timerValue: ${driver_info['timerValue']:04X}")
     print(f"    initIoMap: ${driver_info['initIoMap']:02X}")
     print(f"    playIoMap: ${driver_info['playIoMap']:02X}")
-    
+
     # Now load the tune and trace what timers get set up
-    result = eval_json(ctx, """
+    result = eval_json(
+        ctx,
+        """
         (function() {
             var buffer = new Uint8Array(sidBytes).buffer;
             var machine = new C64Machine({ sampleRate: 44100 });
@@ -132,8 +139,9 @@ def test_giana_timer_setup():
             var cyclesAtLoad = machine.cpu.cycles;
             
             // Run more frames to let init complete
+            var audioBuffer = new Int16Array(4096);
             for (var i = 0; i < 10; i++) {
-                machine.runFrame();
+                machine.runFrame(audioBuffer);
             }
             
             // Check the state after init
@@ -183,8 +191,9 @@ def test_giana_timer_setup():
                 cyclesAtLoad: cyclesAtLoad
             };
         })()
-    """)
-    
+    """,
+    )
+
     print(f"\n  After Init + 3 frames - CIA1 State:")
     print(f"    Timer A Latch: ${result['cia1State']['timerALatch']:04X}")
     print(f"    Timer A Counter: ${result['cia1State'].get('timerACounter', 0):04X}")
@@ -192,50 +201,63 @@ def test_giana_timer_setup():
     print(f"    Timer A IRQ Enabled: {result['cia1State']['timerAIrqEnabled']}")
     print(f"    CRA: ${result['cia1State']['cra']:02X}")
     print(f"    ICR Mask: ${result['cia1State']['icrMask']:02X}")
-    
+
     print(f"\n  After Init - CIA2 State:")
     print(f"    Timer A Latch: ${result['cia2State']['timerALatch']:04X}")
     print(f"    Timer A Running: {result['cia2State']['timerARunning']}")
     print(f"    Timer A NMI Enabled: {result['cia2State']['timerANmiEnabled']}")
     print(f"    CRA: ${result['cia2State']['cra']:02X}")
     print(f"    ICR Mask: ${result['cia2State']['icrMask']:02X}")
-    
+
     print(f"\n  After Init - VIC State:")
     print(f"    Raster Compare: {result['vicState']['rasterCompare']}")
     print(f"    IRQ Enable: ${result['vicState']['irqEnable']:02X}")
-    
+
     print(f"\n  Software Vectors:")
     print(f"    IRQ: ${result['irqVector']:04X}")
     print(f"    NMI: ${result['nmiVector']:04X}")
-    
+
     # Show IRQ handler disassembly
-    if 'irqHandlerCode' in result:
+    if "irqHandlerCode" in result:
         print(f"\n  IRQ Handler at ${result['irqVector']:04X}:")
-        code = result['irqHandlerCode']
+        code = result["irqHandlerCode"]
         print(f"    " + " ".join(f"{b:02X}" for b in code[:16]))
         print(f"    " + " ".join(f"{b:02X}" for b in code[16:32]))
-    
-    if result['cia1Writes']:
+
+    if result["cia1Writes"]:
         print(f"\n  CIA1 writes ({len(result['cia1Writes'])} total):")
-        for w in result['cia1Writes'][:40]:
-            reg_names = {4: "Timer A Lo", 5: "Timer A Hi", 0x0D: "ICR", 0x0E: "CRA", 0x0F: "CRB"}
-            name = reg_names.get(w['reg'], f"reg {w['reg']}")
-            print(f"    $DC{w['reg']:02X} ({name}) = ${w['val']:02X} @ cycle {w['cycles']}")
-    
-    if result['vicWrites']:
+        for w in result["cia1Writes"][:40]:
+            reg_names = {
+                4: "Timer A Lo",
+                5: "Timer A Hi",
+                0x0D: "ICR",
+                0x0E: "CRA",
+                0x0F: "CRB",
+            }
+            name = reg_names.get(w["reg"], f"reg {w['reg']}")
+            print(
+                f"    $DC{w['reg']:02X} ({name}) = ${w['val']:02X} @ cycle {w['cycles']}"
+            )
+
+    if result["vicWrites"]:
         print(f"\n  VIC writes ({len(result['vicWrites'])} total):")
-        for w in result['vicWrites'][:30]:
+        for w in result["vicWrites"][:30]:
             print(f"    ${w['addr']:04X} = ${w['val']:02X} @ cycle {w['cycles']}")
-    
+
     # Calculate expected timer frequency
-    cia1_latch = result['cia1State']['timerALatch']
+    cia1_latch = result["cia1State"]["timerALatch"]
     if cia1_latch > 0:
         freq = 985248 / (cia1_latch + 1)
         print(f"\n  Timer A Frequency: {freq:.2f} Hz (PAL clock)")
         if freq > 100:
             print(f"  ⚠ WARNING: Timer seems too fast for standard playback!")
-    
-    return True
+
+    assert tune_info["isRSID"] and tune_info["playAddress"] == 0
+    assert result["cia1State"]["timerARunning"], "Giana must start its CIA1 timer"
+    assert result["cia1State"]["timerAIrqEnabled"], "Giana must enable CIA1 timer IRQs"
+    assert cia1_latch > 0
+    assert 45 <= 985248 / (cia1_latch + 1) <= 65, result["cia1State"]
+    assert result["irqVector"] == 0xC022, "Giana must install its own IRQ handler"
 
 
 def test_giana_irq_count():
@@ -243,17 +265,18 @@ def test_giana_irq_count():
     print("\n" + "=" * 70)
     print("Test: Giana Sisters IRQ Count (100 frames)")
     print("=" * 70)
-    
+
     sid_path = SID_DIR / "Great_Giana_Sisters.sid"
     if not sid_path.exists():
-        print(f"  ⚠ File not found: {sid_path}")
-        return False
-    
+        raise AssertionError(f"SID fixture not found: {sid_path}")
+
     ctx = create_player_context()
     sid_bytes = load_sid_file(sid_path)
     ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-    
-    result = eval_json(ctx, """
+
+    result = eval_json(
+        ctx,
+        """
         (function() {
             var buffer = new Uint8Array(sidBytes).buffer;
             var machine = new C64Machine({ sampleRate: 44100 });
@@ -332,8 +355,9 @@ def test_giana_irq_count():
             
             // Run 10 frames only (to trace in detail)
             var frames = 10;
+            var audioBuffer = new Int16Array(4096);
             for (var i = 0; i < frames; i++) {
-                machine.runFrame();
+                machine.runFrame(audioBuffer);
             }
             
             // Check state after running
@@ -368,11 +392,13 @@ def test_giana_irq_count():
                 stateAfterFrames: stateAfterFrames,
                 rasterCompareChanges: rasterCompareChanges,
                 irqRasterLines: irqRasterLines,
+                cpuHalted: machine.cpu.halted,
                 isSpeedOk: irqsPerFrame >= 0.5 && irqsPerFrame <= 2.0
             };
         })()
-    """)
-    
+    """,
+    )
+
     print(f"\n  Frames run: {result['frames']}")
     print(f"  Total IRQ triggers: {result['irqCount']}")
     print(f"    - VIC raster IRQs: {result['vicIrqCount']}")
@@ -383,41 +409,65 @@ def test_giana_irq_count():
     print(f"  Expected IRQs (~1/frame): {result['expectedIRQs']}")
     print(f"  SID writes: {result['sidWrites']}")
     print(f"  SID writes per frame: {result['sidWritesPerFrame']:.1f}")
-    
+
     print(f"\n  State BEFORE running frames:")
-    s = result['stateBeforeFrames']
-    print(f"    CIA1 Timer A: latch=${s['cia1TimerALatch']:04X}, running={s['cia1TimerARunning']}, irqEnabled={s['cia1IrqEnabled']}")
-    print(f"    CIA2 Timer A: latch=${s['cia2TimerALatch']:04X}, running={s['cia2TimerARunning']}, nmiEnabled={s['cia2NmiEnabled']}")
-    print(f"    VIC: irqEnable=${s['vicIrqEnable']:02X}, rasterCompare={s['vicRasterCompare']}, rasterCycle={s.get('vicRasterCycle', 'N/A')}")
-    
+    s = result["stateBeforeFrames"]
+    print(
+        f"    CIA1 Timer A: latch=${s['cia1TimerALatch']:04X}, running={s['cia1TimerARunning']}, irqEnabled={s['cia1IrqEnabled']}"
+    )
+    print(
+        f"    CIA2 Timer A: latch=${s['cia2TimerALatch']:04X}, running={s['cia2TimerARunning']}, nmiEnabled={s['cia2NmiEnabled']}"
+    )
+    print(
+        f"    VIC: irqEnable=${s['vicIrqEnable']:02X}, rasterCompare={s['vicRasterCompare']}, rasterCycle={s.get('vicRasterCycle', 'N/A')}"
+    )
+
     print(f"\n  State AFTER running frames:")
-    s = result['stateAfterFrames']
-    print(f"    CIA1 Timer A: latch=${s['cia1TimerALatch']:04X}, running={s['cia1TimerARunning']}, irqEnabled={s['cia1IrqEnabled']}")
-    print(f"    CIA2 Timer A: latch=${s['cia2TimerALatch']:04X}, running={s['cia2TimerARunning']}, nmiEnabled={s['cia2NmiEnabled']}")
-    print(f"    VIC: irqEnable=${s['vicIrqEnable']:02X}, rasterCompare={s['vicRasterCompare']}, rasterCycle={s.get('vicRasterCycle', 'N/A')}")
+    s = result["stateAfterFrames"]
+    print(
+        f"    CIA1 Timer A: latch=${s['cia1TimerALatch']:04X}, running={s['cia1TimerARunning']}, irqEnabled={s['cia1IrqEnabled']}"
+    )
+    print(
+        f"    CIA2 Timer A: latch=${s['cia2TimerALatch']:04X}, running={s['cia2TimerARunning']}, nmiEnabled={s['cia2NmiEnabled']}"
+    )
+    print(
+        f"    VIC: irqEnable=${s['vicIrqEnable']:02X}, rasterCompare={s['vicRasterCompare']}, rasterCycle={s.get('vicRasterCycle', 'N/A')}"
+    )
     print(f"    cyclesPerFrame: {s['cyclesPerFrame']}")
-    
-    if result.get('irqRasterLines'):
+
+    if result.get("irqRasterLines"):
         print(f"\n  Raster lines at first {len(result['irqRasterLines'])} IRQs:")
-        for i, info in enumerate(result['irqRasterLines'][:20]):
-            print(f"    IRQ #{i+1}: line={info['line']}, compare={info['compare']}, cycle={info['cycle']}")
-    
-    if result['rasterCompareChanges']:
-        print(f"\n  Raster compare (D012) writes (first {len(result['rasterCompareChanges'])}):")
-        for i, change in enumerate(result['rasterCompareChanges'][:20]):
-            print(f"    Write #{i+1}: D012=${change['val']:02X} (at IRQ #{change['irqCount']})")
-    
-    if result['irqsPerFrame'] > 2:
+        for i, info in enumerate(result["irqRasterLines"][:20]):
+            print(
+                f"    IRQ #{i+1}: line={info['line']}, compare={info['compare']}, cycle={info['cycle']}"
+            )
+
+    if result["rasterCompareChanges"]:
+        print(
+            f"\n  Raster compare (D012) writes (first {len(result['rasterCompareChanges'])}):"
+        )
+        for i, change in enumerate(result["rasterCompareChanges"][:20]):
+            print(
+                f"    Write #{i+1}: D012=${change['val']:02X} (at IRQ #{change['irqCount']})"
+            )
+
+    if result["irqsPerFrame"] > 2:
         print(f"\n  ⚠ WARNING: Too many IRQs per frame - playing too fast!")
-        print(f"     This could cause the music to play at {result['irqsPerFrame']:.1f}x normal speed")
-    elif result['irqsPerFrame'] < 0.5:
+        print(
+            f"     This could cause the music to play at {result['irqsPerFrame']:.1f}x normal speed"
+        )
+    elif result["irqsPerFrame"] < 0.5:
         print(f"\n  ⚠ WARNING: Too few IRQs per frame - playing too slow!")
     else:
         print(f"\n  ✓ IRQ rate looks correct")
-    
-    return result['isSpeedOk']
+
+    assert not result["cpuHalted"], "Giana playback halted the CPU"
+    assert result["sidWrites"] > 0, "Giana playback produced no SID writes"
+    assert result[
+        "isSpeedOk"
+    ], f"Unexpected IRQ rate: {result['irqsPerFrame']} per frame"
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test_giana_timer_setup()
     test_giana_irq_count()

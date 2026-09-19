@@ -200,6 +200,7 @@ export class Assembler {
         this.warnings = [];
         this.output = [];
         this.sourceMap = [];
+        this.startAddress = null;
         // Pass-1 mode cache: lineNum -> addressing mode. Pass-2 reuses these so
         // a forward-referenced label that turns out to be zero-page can't shrink
         // an instruction pass-1 sized as absolute (which would mis-align addresses).
@@ -290,10 +291,7 @@ export class Assembler {
         this.currentAddress = 0x0800;
         this.output = [];
         this.sourceMap = [];
-        let startAddress = null;
-        // Track the expected next address for padding calculation
-        // This is startAddress + output.length
-        this.outputNextAddress = null;
+        this.startAddress = null;
 
         for (const line of lines) {
             if (!line.trimmed) continue;
@@ -303,20 +301,12 @@ export class Assembler {
 
                 // Handle directives
                 if (parsed.directive) {
-                    if (startAddress === null && parsed.directive !== 'ORG') {
-                        startAddress = this.currentAddress;
-                        this.outputNextAddress = this.currentAddress;
-                    }
                     this.handleDirectivePass2(parsed, line.lineNum);
                     continue;
                 }
 
                 // Handle instruction
                 if (parsed.mnemonic) {
-                    if (startAddress === null) {
-                        startAddress = this.currentAddress;
-                        this.outputNextAddress = this.currentAddress;
-                    }
                     // Force the same addressing mode chosen in pass 1 so byte counts match.
                     if (this.lineModes.has(line.lineNum)) {
                         parsed.mode = this.lineModes.get(line.lineNum);
@@ -327,9 +317,6 @@ export class Assembler {
                 this.error(line.lineNum, e.message);
             }
         }
-
-        // Set start address
-        this.startAddress = startAddress || 0x0800;
     }
 
     //
@@ -559,7 +546,7 @@ export class Assembler {
         switch (parsed.directive) {
             case 'ORG':
                 const addr = this.parseValue(parsed.operand);
-                if (addr === null) {
+                if (!Number.isInteger(addr) || addr < 0 || addr > 0xFFFF) {
                     this.error(lineNum, `Invalid address: ${parsed.operand}`);
                 } else {
                     this.currentAddress = addr;
@@ -587,7 +574,7 @@ export class Assembler {
 
             case 'BYTE':
             case 'DB':
-                const bytes = this.parseDataBytes(parsed.operand);
+                const bytes = this.parseDataBytes(parsed.operand, true);
                 this.currentAddress += bytes.length;
                 break;
 
@@ -621,21 +608,13 @@ export class Assembler {
         switch (parsed.directive) {
             case 'ORG':
                 const newAddr = this.parseValue(parsed.operand);
-                // If we've already emitted code and new address is higher,
-                // pad with zeros to fill the gap
-                if (this.outputNextAddress !== null && newAddr > this.outputNextAddress) {
-                    const padding = newAddr - this.outputNextAddress;
-                    for (let i = 0; i < padding; i++) {
-                        this.output.push(0);
-                        this.sourceMap.push({
-                            address: this.outputNextAddress + i,
-                            lineNum: lineNum
-                        });
+                if (this.output.length > 0) {
+                    if (newAddr < this.currentAddress) {
+                        throw new Error('ORG cannot move backwards after emitting code or data');
                     }
-                    this.outputNextAddress = newAddr;
-                } else if (this.outputNextAddress === null) {
-                    // First ORG sets the starting point
-                    this.outputNextAddress = newAddr;
+                    while (this.currentAddress < newAddr) {
+                        this.emit(0, lineNum);
+                    }
                 }
                 this.currentAddress = newAddr;
                 break;
@@ -685,12 +664,21 @@ export class Assembler {
     //
     // Parse data bytes (comma-separated values)
     //
-    parseDataBytes(operand) {
+    parseDataBytes(operand, allowUnresolved = false) {
         const bytes = [];
         const parts = operand.split(',');
         for (const part of parts) {
-            const value = this.parseValue(part.trim());
-            if (value !== null) {
+            const expression = part.trim();
+            if (!expression) {
+                throw new Error('BYTE requires a value for each operand');
+            }
+            const value = this.parseValue(expression);
+            if (value === null && allowUnresolved) {
+                // Forward references still occupy one byte in the address pass.
+                bytes.push(0);
+            } else if (!Number.isInteger(value)) {
+                throw new Error(`Undefined symbol or invalid BYTE value: ${expression}`);
+            } else {
                 bytes.push(value);
             }
         }
@@ -747,16 +735,19 @@ export class Assembler {
     * Emit a byte
     */
     emit(byte, lineNum) {
+        if (!Number.isInteger(this.currentAddress) || this.currentAddress < 0 || this.currentAddress > 0xFFFF) {
+            throw new Error('Output exceeds the 16-bit address space');
+        }
+        // EQU and leading ORGs do not establish the output origin; the first byte does.
+        if (this.startAddress === null) {
+            this.startAddress = this.currentAddress;
+        }
         this.output.push(byte & 0xFF);
         this.sourceMap.push({
             address: this.currentAddress,
             lineNum: lineNum
         });
         this.currentAddress++;
-        // Keep outputNextAddress in sync
-        if (this.outputNextAddress !== null) {
-            this.outputNextAddress++;
-        }
     }
 
     /**
@@ -780,7 +771,7 @@ export class Assembler {
         return {
             success: this.errors.length === 0,
             bytes: new Uint8Array(this.output),
-            startAddress: this.startAddress || 0x0800,
+            startAddress: this.startAddress ?? 0x0800,
             symbols: Object.fromEntries(this.symbols),
             sourceMap: this.sourceMap,
             errors: this.errors,

@@ -43,9 +43,8 @@
     --brand-bg: #056597;
     --main-bg: #222277;
     --footer-bg: #056597;
-    /* Dark text used on the lighter brand/footer backgrounds for contrast */
-    --brand-text: #0A2540;
-    --brand-text-muted: #1A3A55;
+    --brand-text: #FFFFFF;
+    --brand-text-muted: #E0EDF5;
 
     /* Theme variables - classic C64 boot screen colors */
     --bg-primary: var(--c64-blue);
@@ -424,7 +423,7 @@ body {
     display: flex;
     gap: 20px;
     padding: 20px 30px 20px 20px;
-    height: calc(100vh - 80px);
+    min-height: calc(100vh - 100px);
     box-sizing: border-box;
 }
 
@@ -609,15 +608,27 @@ body {
     color: #4fc3f7;
 }
 
+.c64-status {
+    margin-top: 10px;
+    color: var(--c64-yellow);
+    text-align: center;
+}
+
+.c64-status:empty {
+    display: none;
+}
+
 /* Editor panel on right side (50%) */
 .c64-editor-panel {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    height: 100%;
+    align-self: stretch;
     overflow: hidden;
     min-width: 0;
+    /* The workspace, not the line-number stack, determines editor height. */
+    contain: size;
 }
 
 .c64-editor-panel h2 {
@@ -626,12 +637,18 @@ body {
     margin: 0 0 0.75rem 0;
 }
 
+.c64-editor-panel .panel-header {
+    flex-wrap: wrap;
+}
+
 /* Sample selector dropdown */
 .sample-selector {
     display: flex;
     align-items: center;
     gap: 10px;
     margin-bottom: 12px;
+    min-width: 0;
+    max-width: 100%;
 }
 
 /* Panel headers already provide the spacing */
@@ -658,7 +675,9 @@ body {
     padding: 8px 12px;
     font-size: 0.875rem;
     cursor: pointer;
-    min-width: 200px;
+    width: 200px;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .sample-selector select:hover {
@@ -682,7 +701,8 @@ body {
     padding: 4px;
 }
 
-.c64-editor-panel #basic-editor {
+.c64-editor-panel #basic-editor,
+.c64-editor-panel #asm-editor {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -862,7 +882,7 @@ body {
     color: #888;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1024px) {
     .c64-page {
         flex-direction: column;
         height: auto;
@@ -886,8 +906,13 @@ body {
     }
     
     .c64-editor-panel {
+        contain: none;
         max-width: 100%;
-        max-height: 500px;
+    }
+
+    /* Bound the code area without clipping wrapped controls or error feedback. */
+    .c64-editor-panel .editor-container {
+        flex: 0 0 300px;
     }
 }
 
@@ -1497,11 +1522,12 @@ body {
 
 .chip-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
     gap: 20px;
 }
 
 .chip-card {
+    min-width: 0;
     background: var(--c64-black);
     border: 2px solid var(--c64-light-blue);
     border-radius: 8px;
@@ -1567,6 +1593,7 @@ body {
 
 .chip-3d-dual-container .chip-3d-small {
     flex: 1;
+    min-width: 0;
     height: 120px;
     margin-bottom: 0;
 }
@@ -1577,6 +1604,7 @@ body {
 
 .chip-3d-container canvas {
     display: block;
+    max-width: 100%;
     border-radius: 6px;
 }
 
@@ -1648,7 +1676,7 @@ body {
 }
 
 .memmap-table-body {
-    overflow-y: auto;
+    overflow: auto;
 }
 
 /* Region details panel */
@@ -1868,6 +1896,7 @@ body {
 
 .memory-table {
     width: 100%;
+    min-width: 520px;
     border-collapse: collapse;
     table-layout: fixed;
 }
@@ -1988,6 +2017,10 @@ body {
     text-align: center;
     padding: 8px;
     box-sizing: border-box;
+    appearance: none;
+    border: 0;
+    font-family: inherit;
+    color: inherit;
 }
 
 .memory-table td > .memory-cell {
@@ -2011,6 +2044,7 @@ body {
 }
 
 .memory-cell .region-name {
+    display: block;
     font-size: 0.875rem;
     font-weight: bold;
     line-height: 1.3;
@@ -2018,13 +2052,14 @@ body {
 }
 
 .memory-cell .region-size {
+    display: block;
     font-size: 0.875rem;
     opacity: 0.8;
     letter-spacing: 0.3px;
 }
 
 /* CPU cells: horizontal text layout */
-.memory-table td.cpu-cell .memory-cell > div {
+.memory-table td.cpu-cell .memory-cell > span {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -2080,6 +2115,19 @@ body {
     cursor: pointer;
     transition: all 0.15s ease;
     flex-shrink: 0;
+    appearance: none;
+    border: 0;
+    padding: 0;
+    font-family: inherit;
+}
+
+.memory-cell:focus-visible {
+    outline-offset: -3px;
+}
+
+.mem-cell:focus-visible {
+    position: relative;
+    z-index: 2;
 }
 
 /* Proportional sizing for ranges */
@@ -2117,6 +2165,7 @@ body {
 .region-charrom { background: #2d5a5a; color: #a5d4d4; }
 .region-cart-lo { background: #5a4a2d; color: #d4c4a5; }
 .region-cart-hi { background: #4a5a2d; color: #c4d4a5; }
+.region-unmapped { background: #262635; color: var(--c64-light-grey); }
 
 /* VIC-specific region colors */
 .region-vic-screen { background: #4a2d5a; color: #c4a5d4; }
@@ -2139,8 +2188,7 @@ body {
 
 /* Stack direction arrow */
 .stack-arrow {
-    display: flex;
-    align-items: center;
+    display: block;
     font-size: 0.625rem;
     color: var(--c64-yellow);
     font-weight: normal;
@@ -3005,6 +3053,14 @@ body {
     color: var(--c64-black);
 }
 
+.player-btn:disabled,
+.sid-btn:disabled,
+.track-btn:disabled,
+.mute-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
 .player-btn.play-btn {
     padding: 0.75rem 1.5rem;
     font-size: 1.25rem;
@@ -3036,7 +3092,7 @@ body {
 /* Voice Visualizer */
 .voice-visualizer {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 1rem;
 }
 
@@ -3068,6 +3124,8 @@ body {
     padding: 0.15rem 0.5rem;
     font-size: 0.75rem;
     border-radius: 2px;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .voice-meters {
@@ -3119,6 +3177,7 @@ body {
 
 .adsr-display {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.75rem;
     margin-top: 0.5rem;
 }
@@ -3133,9 +3192,8 @@ body {
 }
 
 .gate-indicator {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
+    display: inline-block;
+    margin-top: 0.5rem;
     background: var(--c64-dark-grey);
     color: var(--c64-grey);
     padding: 0.15rem 0.35rem;
@@ -3203,6 +3261,7 @@ body {
 
 .filter-modes, .filter-voices {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
 }
 
@@ -3292,6 +3351,10 @@ body {
 
 .register-cell.updated {
     background: var(--c64-light-blue);
+}
+
+.register-cell .reg-value {
+    min-width: 0;
 }
 
 .reg-name {
@@ -3384,7 +3447,7 @@ body {
 
 .sid-btn-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     gap: 0.5rem;
 }
 

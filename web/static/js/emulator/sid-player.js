@@ -48,7 +48,8 @@ const RSID_MAGIC = 0x52534944; // "RSID"
 //
 // Parse a SID file and extract metadata and data
 //
-// Supports PSID v1-v4 and RSID file formats used by the High Voltage SID Collection.
+// Supports single-SID PSID v1-v4 and machine-code RSID v2-v4.
+// MUS, PlaySID-specific, BASIC, and multi-SID tunes are rejected explicitly.
 //
 // @param {ArrayBuffer} buffer - The raw SID file data
 // @returns {Object} Parsed SID file info including:
@@ -70,6 +71,9 @@ const RSID_MAGIC = 0x52534944; // "RSID"
 // @throws {Error} If the file is not a valid PSID/RSID file
 //
 export function parseSidFile(buffer) {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 8) {
+        throw new Error('SID file is too short to contain a header');
+    }
     const data = new Uint8Array(buffer);
     const view = new DataView(buffer);
 
@@ -81,10 +85,15 @@ export function parseSidFile(buffer) {
 
     const isRSID = magic === RSID_MAGIC;
     const version = view.getUint16(4, false);
+    if (version < (isRSID ? 2 : 1) || version > 4) {
+        throw new Error(`Unsupported ${isRSID ? 'RSID' : 'PSID'} version: ${version}`);
+    }
+    const headerSize = version === 1 ? 0x76 : 0x7c;
+    if (buffer.byteLength < headerSize) {
+        throw new Error('SID file has a truncated header');
+    }
     const dataOffset = view.getUint16(6, false);
-    // PSID v1 header is 0x76 bytes, v2+ is 0x7C. Reject anything that would
-    // point us before the header end or past the end of the file.
-    if (dataOffset < 0x76 || dataOffset >= buffer.byteLength) {
+    if (dataOffset < headerSize || dataOffset >= buffer.byteLength) {
         throw new Error(`Invalid PSID/RSID dataOffset: ${dataOffset}`);
     }
     const loadAddress = view.getUint16(8, false);
@@ -93,6 +102,12 @@ export function parseSidFile(buffer) {
     const songs = view.getUint16(14, false);
     const startSong = view.getUint16(16, false);
     const speed = view.getUint32(18, false);
+    if (songs < 1 || songs > 256 || startSong < 1 || startSong > songs) {
+        throw new Error('Invalid SID song count or starting song');
+    }
+    if (isRSID && (loadAddress !== 0 || playAddress !== 0 || speed !== 0)) {
+        throw new Error('RSID requires an embedded load address, zero play address, and zero speed');
+    }
 
     // Read strings (null-terminated, 32 bytes each)
     const decoder = new TextDecoder('iso-8859-1');
@@ -114,6 +129,25 @@ export function parseSidFile(buffer) {
         secondSIDAddress = data[122];
         thirdSIDAddress = data[123];
     }
+    if (flags & 1) {
+        throw new Error('MUS-format SID tunes are not supported');
+    }
+    if (flags & 2) {
+        throw new Error(isRSID ? 'BASIC RSID tunes are not supported' :
+            'PlaySID-specific tunes are not supported');
+    }
+    const allowedFlags = version >= 4 ? 0x3ff : version >= 3 ? 0xff : 0x3f;
+    if (flags & ~allowedFlags) {
+        throw new Error('SID header contains reserved flags');
+    }
+    if (secondSIDAddress || thirdSIDAddress) {
+        throw new Error('Multiple SID chips are not supported');
+    }
+    if (((startPage === 0 || startPage === 0xff) && pageLength !== 0) ||
+        (startPage !== 0 && startPage !== 0xff &&
+            (pageLength === 0 || startPage + pageLength > 0x100))) {
+        throw new Error('Invalid SID driver relocation range');
+    }
 
     // Extract program data
     let programData = data.subarray(dataOffset);
@@ -126,6 +160,13 @@ export function parseSidFile(buffer) {
         }
         actualLoadAddress = programData[0] | (programData[1] << 8);
         programData = programData.subarray(2);
+    }
+    if (programData.length === 0 || actualLoadAddress + programData.length > 0x10000) {
+        throw new Error('SID program is empty or exceeds C64 memory');
+    }
+    if (isRSID && (actualLoadAddress < 0x07e8 || initAddress < 0x07e8 ||
+        (initAddress >= 0xa000 && initAddress < 0xc000) || initAddress >= 0xd000)) {
+        throw new Error('RSID load and init addresses must use supported C64 RAM');
     }
 
     // Determine clock and model from flags
@@ -146,7 +187,7 @@ export function parseSidFile(buffer) {
         initAddress: initAddress || actualLoadAddress,
         playAddress,
         songs,
-        startSong: startSong || 1,
+        startSong,
         speed,
         name,
         author,
@@ -166,21 +207,17 @@ export function parseSidFile(buffer) {
 // Install a PSID driver into a C64 machine
 //
 // @param {C64Machine} machine - The C64 machine instance
-// @param {Object} tune - Parsed SID tune info
-// @param {number} song - Song number (0-based)
+// @param {Object} driver - Validated driver and memory layout
 // @private
 //
-function installDriver(machine, tune, song) {
-    // Generate the driver
-    const driver = generatePsidDriver(tune, song);
-
+function installDriver(machine, driver) {
     // Install all memory regions
     for (const region of driver.regions) {
         machine.loadCode(region.data, region.address);
     }
 
     // Set memory configuration
-    machine.ram[0x0001] = driver.ioPort;
+    machine.write(0x0001, driver.ioPort);
 
     // Set CPU state
     machine.cpu.PC = driver.cpuState.PC;
@@ -190,6 +227,18 @@ function installDriver(machine, tune, song) {
     machine.cpu.SP = driver.cpuState.SP;
     machine.cpu.P = driver.cpuState.P;
     machine.cpu.halted = false;
+}
+
+function configureSidTune(machine, tune, driver) {
+    machine.reset();
+    if (tune.clock !== machine.clockFrequency) {
+        machine.clockFrequency = tune.clock;
+        machine.cyclesPerFrame = machine.rasterTiming.cyclesPerFrame;
+    }
+    machine.sid.setSamplingParameters(machine.clockFrequency, SamplingMethod.DECIMATE, machine.sampleRate);
+    machine.sid.setChipModel(tune.model);
+    machine.loadCode(tune.data, tune.loadAddress);
+    installDriver(machine, driver);
 }
 
 //
@@ -203,37 +252,14 @@ function installDriver(machine, tune, song) {
 // @returns {Object} The parsed SID tune info
 //
 export function loadSidTune(machine, buffer, song = null) {
-    // Parse the SID file
     const tune = parseSidFile(buffer);
-
-    // Use the specified song or the file's default
     const songNumber = song !== null ? song : tune.startSong;
-
-    // Reset the machine
-    machine.reset();
-
-    // Configure clock and SID model from tune
-    if (tune.clock !== machine.clockFrequency) {
-        machine.clockFrequency = tune.clock;
-        machine.sid.setSamplingParameters(
-            machine.clockFrequency,
-            SamplingMethod.DECIMATE,
-            machine.sampleRate
-        );
-        // Update cycles per frame for proper timing
-        machine.cyclesPerFrame = tune.clock === CLOCK_NTSC
-            ? Math.floor(tune.clock / 60)  // NTSC: 60Hz
-            : Math.floor(tune.clock / 50); // PAL: 50Hz
+    if (!Number.isInteger(songNumber) || songNumber < 1 || songNumber > tune.songs) {
+        throw new RangeError('SID song number is out of range');
     }
-
-    machine.sid.setChipModel(tune.model);
-
-    // Load tune data into RAM
-    machine.loadCode(tune.data, tune.loadAddress);
-
-    // Install the PSID driver
-    installDriver(machine, tune, songNumber - 1);
-
+    // Complete validation and placement before touching the existing machine.
+    const driver = generatePsidDriver(tune, songNumber - 1);
+    configureSidTune(machine, tune, driver);
     return tune;
 }
 
@@ -259,7 +285,7 @@ class SIDWorkletProcessor extends AudioWorkletProcessor {
             if (event.data.type === 'samples') {
                 this.sampleQueue.push(new Float32Array(event.data.buffer));
                 this.pendingRequest = false;
-                if (this.sampleQueue.length > 100) this.sampleQueue.shift();
+                if (this.sampleQueue.length > 2) this.sampleQueue.shift();
             }
         };
     }
@@ -303,6 +329,24 @@ registerProcessor('sid-worklet-processor', SIDWorkletProcessor);
 // WEB SID PLAYER
 // ============================================================================
 
+function playbackCancelled() {
+    const error = new Error('SID playback operation was cancelled');
+    error.name = 'AbortError';
+    return error;
+}
+
+function renderSidFrame(machine, buffer) {
+    machine.runFrame(buffer);
+    if (machine.cpu?.halted) {
+        throw new Error('SID program halted the C64 CPU');
+    }
+    const count = machine.audioSamplesGenerated;
+    if (!Number.isInteger(count) || count <= 0 || count > buffer.length) {
+        throw new Error('SID frame produced an invalid audio sample count');
+    }
+    return count;
+}
+
 //
 // SIDPlayer - SID music player using full C64 emulation
 //
@@ -337,15 +381,21 @@ export class SIDPlayer {
         // Buffer for worklet
         this.workletBufferSize = 4096;
         this.workletSamples = null;
+        this._workletModulePromise = null;
+        this._loadGeneration = 0;
+        this._playGeneration = 0;
+        this._playPromise = null;
+        this._cancelStart = null;
 
         // C64 machine for emulation
         this.machine = null;
 
-        // Frame timing
+        // One frame is the entire FIFO: callbacks consume it before producing another.
         this._frameCount = 0;
         this.samplesPerFrame = 0;
-        this.samplesToNextFrame = 0;
-        this._frameCyclePos = 0;
+        this._frameBuffer = new Int16Array(Math.ceil(this.sampleRate / 50) + 32);
+        this._frameReadIndex = 0;
+        this._frameSampleCount = 0;
 
         // Callback for UI updates
         this.onFrameUpdate = null;
@@ -357,59 +407,87 @@ export class SIDPlayer {
 
     //
     // Load a SID file from URL
+    // Only the latest selection may commit; superseded loads reject with AbortError.
     // @param {string} url - URL to the SID file
     // @returns {Promise<Object>} Parsed SID file info
     //
     async load(url) {
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Failed to load: ${response.statusText}`);
+        const generation = ++this._loadGeneration;
+        let buffer;
+        try {
+            const response = await fetch(url);
+            if (generation !== this._loadGeneration) throw playbackCancelled();
+            if (!response.ok) {
+                throw new Error(`Failed to load: ${response.statusText}`);
+            }
+            buffer = await response.arrayBuffer();
+        } catch (error) {
+            if (generation !== this._loadGeneration) throw playbackCancelled();
+            throw error;
         }
-        const buffer = await response.arrayBuffer();
+        if (generation !== this._loadGeneration) throw playbackCancelled();
         return this.loadData(buffer);
     }
 
     //
     // Load SID file from ArrayBuffer
     // @param {ArrayBuffer} buffer - Raw SID file data
+    // Successful selections leave playback stopped; failed selections preserve it.
     // @returns {Object} Parsed SID file info
     //
     loadData(buffer) {
-        // Create C64 machine
-        this.machine = new C64Machine({ sampleRate: this.sampleRate });
+        ++this._loadGeneration;
+        const tune = parseSidFile(buffer);
+        const playback = this.preparePlayback(tune, tune.startSong - 1, 10);
+        return this.commitPlayback(playback);
+    }
 
-        // Set up SID write interception for visualization
-        this.setupSIDInterception();
+    preparePlayback(tune, song, initFrames, previousMachine = null) {
+        const configuration = previousMachine ? {
+            ...tune,
+            clock: previousMachine.clockFrequency,
+            model: previousMachine.sid.getChipModel()
+        } : tune;
+        const driver = generatePsidDriver(configuration, song);
+        const machine = new C64Machine({ sampleRate: this.sampleRate, audioEnabled: true });
+        const registers = new Uint8Array(32);
+        const registerWriteLog = [];
+        const frameBuffer = new Int16Array(Math.ceil(this.sampleRate / 50) + 32);
+        configureSidTune(machine, configuration, driver);
+        if (previousMachine) machine.cyclesPerFrame = previousMachine.cyclesPerFrame;
+        this.setupSIDInterception(machine, registers, registerWriteLog);
+        this.runInitFrames(initFrames, machine, frameBuffer);
+        return { machine, tune, song, registers, registerWriteLog, frameBuffer };
+    }
 
-        // Load the tune
-        this.sidFile = loadSidTune(this.machine, buffer);
-
-        // Initialize timing
-        const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
-        this.samplesPerFrame = this.sampleRate / irqFreq;
-        this.samplesToNextFrame = this.samplesPerFrame;
+    commitPlayback(playback) {
+        this.stop();
+        this.machine = playback.machine;
+        this.sidFile = playback.tune;
+        this.currentSong = playback.song;
+        this.registers = playback.registers;
+        this.registerWriteLog = playback.registerWriteLog;
+        this._frameBuffer = playback.frameBuffer;
         this._frameCount = 0;
-        this._frameCyclePos = 0;
-
-        // Set initial track
-        this.currentSong = this.sidFile.startSong - 1;
-
-        // Run a few frames to initialize the tune
-        this.runInitFrames(10);
-
+        this.samplesPerFrame = this.sampleRate * this.machine.cyclesPerFrame / this.machine.clockFrequency;
         return this.sidFile;
+    }
+
+    clearBufferedSamples() {
+        this._frameReadIndex = 0;
+        this._frameSampleCount = 0;
     }
 
     //
     // Run a few frames to initialize the tune (execute PSID driver setup)
     // @param {number} count - Number of frames to run
     //
-    runInitFrames(count) {
-        if (!this.machine) return;
-
+    runInitFrames(count, machine = this.machine, buffer = this._frameBuffer) {
+        if (!machine) return;
         for (let i = 0; i < count; i++) {
-            this.machine.runFrame();
+            renderSidFrame(machine, buffer);
         }
+        if (machine === this.machine) this.clearBufferedSamples();
     }
 
     //
@@ -419,7 +497,8 @@ export class SIDPlayer {
     runVisualizationFrame() {
         if (!this.machine || !this.isPlaying) return;
 
-        this.machine.runFrame();
+        this.clearBufferedSamples();
+        renderSidFrame(this.machine, this._frameBuffer);
         this._frameCount++;
     }
 
@@ -427,24 +506,22 @@ export class SIDPlayer {
     // Set up SID write interception for real-time visualization
     // @private
     //
-    setupSIDInterception() {
-        if (!this.machine) return;
-
-        const self = this;
-        const originalWrite = this.machine.sid.write.bind(this.machine.sid);
-
-        this.machine.sid.write = function (offset, value, cycle) {
+    setupSIDInterception(machine = this.machine, registers = this.registers,
+        writeLog = this.registerWriteLog) {
+        if (!machine) return;
+        const originalWrite = machine.sid.write.bind(machine.sid);
+        machine.sid.write = function (offset, value, cycle) {
             // Capture register for visualization
-            self.registers[offset & 0x1f] = value;
+            registers[offset & 0x1f] = value;
 
             // Log recent writes
-            self.registerWriteLog.push({
+            writeLog.push({
                 offset: offset,
                 value: value,
                 time: Date.now()
             });
-            if (self.registerWriteLog.length > 100) {
-                self.registerWriteLog.shift();
+            if (writeLog.length > 100) {
+                writeLog.shift();
             }
 
             // Pass through to actual SID
@@ -454,35 +531,15 @@ export class SIDPlayer {
 
     //
     // Change to a specific track (0-based)
+    // Success leaves the selected track stopped; failure preserves the old track.
     // @param {number} track - Track index (0-based)
+    // @returns {Object} Tune metadata
     //
     changeTrack(track) {
-        if (!this.sidFile || !this.machine) return;
-
-        this.currentSong = Math.max(0, Math.min(track, this.sidFile.songs - 1));
-        this._frameCount = 0;
-        this._frameCyclePos = 0;
-
-        // Reset machine and reload tune with new song
-        this.machine.reset();
-
-        // Load tune data into RAM
-        this.machine.loadCode(this.sidFile.data, this.sidFile.loadAddress);
-
-        // Install the PSID driver for the new song
-        installDriver(this.machine, this.sidFile, this.currentSong);
-
-        // Reset timing
-        const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
-        this.samplesPerFrame = this.sampleRate / irqFreq;
-        this.samplesToNextFrame = this.samplesPerFrame;
-
-        // Clear visualization state
-        this.registers.fill(0);
-        this.registerWriteLog = [];
-
-        // Run init frames
-        this.runInitFrames(5);
+        if (!this.sidFile) throw new Error('No SID file is loaded');
+        const playback = this.preparePlayback(this.sidFile, track, 5, this.machine);
+        ++this._loadGeneration;
+        return this.commitPlayback(playback);
     }
 
     //
@@ -496,70 +553,67 @@ export class SIDPlayer {
             return;
         }
 
-        const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
-
-        // Safety check: ensure timing is initialized
-        if (this.samplesPerFrame <= 0) {
-            this.samplesPerFrame = this.sampleRate / irqFreq;
-            this.samplesToNextFrame = this.samplesPerFrame;
-        }
-
-        const cyclesPerSample = this.machine.clockFrequency / this.sampleRate;
+        const machine = this.machine;
         let bufferOffset = 0;
-
-        // Scratch buffer for the SID's Int16 output, reused across callbacks.
-        const maxSamplesPerIteration = Math.ceil(this.samplesPerFrame) + 1;
-        if (!this._tempSamples || this._tempSamples.length < maxSamplesPerIteration) {
-            this._tempSamples = new Int16Array(maxSamplesPerIteration);
-        }
-        const tempSamples = this._tempSamples;
-
         while (bufferOffset < buffer.length) {
-            // Time to run a new frame?
-            if (this.samplesToNextFrame <= 0) {
-                this._frameCyclePos = 0;
-                // Note: runFrame() calls sid.beginFrame() internally when audioEnabled is true
-                this.machine.runFrame();
+            if (this._frameReadIndex >= this._frameSampleCount) {
+                this._frameSampleCount = renderSidFrame(machine, this._frameBuffer);
+                this._frameReadIndex = 0;
                 this._frameCount++;
-
-                this.samplesToNextFrame += this.sampleRate / irqFreq;
-
-                if (this.onFrameUpdate) {
-                    this.onFrameUpdate();
-                }
+                if (this.onFrameUpdate) this.onFrameUpdate();
             }
-
-            const samplesUntilFrame = Math.ceil(this.samplesToNextFrame);
-            const samplesNeeded = buffer.length - bufferOffset;
-            const samplesToProcess = Math.min(samplesUntilFrame, samplesNeeded, tempSamples.length - 1);
-
-            if (samplesToProcess <= 0) {
-                this.samplesToNextFrame = 0;
-                continue;
+            if (!this.isPlaying || this.machine !== machine) {
+                buffer.fill(0, bufferOffset);
+                return;
             }
-
-            const cyclesToProcess = Math.ceil(samplesToProcess * cyclesPerSample);
-            const generated = this.machine.sid.clock(cyclesToProcess, tempSamples, this.machine.frameCycleStart + this._frameCyclePos);
-            this._frameCyclePos += cyclesToProcess;
-
-            for (let i = 0; i < generated && bufferOffset < buffer.length; i++) {
-                buffer[bufferOffset++] = tempSamples[i] / 32768;
+            const count = Math.min(buffer.length - bufferOffset,
+                this._frameSampleCount - this._frameReadIndex);
+            for (let i = 0; i < count; i++) {
+                buffer[bufferOffset++] = this._frameBuffer[this._frameReadIndex++] / 32768;
             }
-
-            this.samplesToNextFrame -= generated || samplesToProcess;
         }
     }
 
     //
     // Start playback
+    // Concurrent calls share one startup; stop/selection cancels it with AbortError.
     // @returns {Promise<void>}
     //
-    async play() {
-        if (!this.sidFile) {
-            console.error('SIDPlayer: no SID file loaded');
-            return;
+    play() {
+        if (this._playPromise) return this._playPromise;
+        if (this.isPlaying) return Promise.resolve();
+        if (!this.sidFile || !this.machine) {
+            return Promise.reject(new Error('No SID file is loaded'));
         }
+        const generation = ++this._playGeneration;
+        const cancelled = new Promise((resolve, reject) => {
+            this._cancelStart = () => reject(playbackCancelled());
+        });
+        const pending = Promise.race([this.startPlayback(generation), cancelled]);
+        const operation = pending.then(() => {
+            this.checkPlaybackGeneration(generation);
+        }).catch((error) => {
+            if (generation === this._playGeneration) {
+                this.isPlaying = false;
+                this.disconnectAudioNodes();
+                this.clearBufferedSamples();
+            }
+            throw error;
+        }).finally(() => {
+            if (this._playPromise === operation) {
+                this._playPromise = null;
+                this._cancelStart = null;
+            }
+        });
+        this._playPromise = operation;
+        return operation;
+    }
 
+    checkPlaybackGeneration(generation) {
+        if (generation !== this._playGeneration) throw playbackCancelled();
+    }
+
+    async startPlayback(generation) {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: this.sampleRate
@@ -569,89 +623,108 @@ export class SIDPlayer {
         if (this.audioContext.state === 'suspended') {
             await this.audioContext.resume();
         }
+        this.checkPlaybackGeneration(generation);
+        if (this.audioContext.state !== 'running') {
+            throw new Error('The audio context could not start playback');
+        }
 
         // Handle sample rate change
         if (this.audioContext.sampleRate !== this.sampleRate) {
             this.sampleRate = this.audioContext.sampleRate;
-
-            const irqFreq = this.sidFile.clock === CLOCK_NTSC ? 60 : 50;
-            this.samplesPerFrame = this.sampleRate / irqFreq;
-            this.samplesToNextFrame = this.samplesPerFrame;
-
-            if (this.machine) {
-                this.machine.sid.setSamplingParameters(
-                    this.machine.clockFrequency,
-                    SamplingMethod.DECIMATE,
-                    this.sampleRate
-                );
-            }
+            this.samplesPerFrame = this.sampleRate * this.machine.cyclesPerFrame / this.machine.clockFrequency;
+            this.machine.sampleRate = this.sampleRate;
+            this.machine.sid.setSamplingParameters(
+                this.machine.clockFrequency, SamplingMethod.DECIMATE, this.sampleRate
+            );
+            this._frameBuffer = new Int16Array(Math.ceil(this.sampleRate / 50) + 32);
+            this.clearBufferedSamples();
         }
 
         // Try AudioWorklet first
         if (this.audioContext.audioWorklet) {
+            let ready = false;
             try {
-                // Set isPlaying BEFORE setup to avoid race condition
-                this.isPlaying = true;
-                await this.setupAudioWorklet();
+                await this.setupAudioWorklet(generation);
+                ready = true;
+            } catch (error) {
+                this.checkPlaybackGeneration(generation);
+                this.isPlaying = false;
+                this.disconnectAudioNodes();
+                console.warn('AudioWorklet setup failed, falling back to ScriptProcessor:', error.message);
+            }
+            if (ready) {
+                this.checkPlaybackGeneration(generation);
+                // The processor requests its first block too: unsolicited
+                // priming would break its one-outstanding-request accounting.
                 return;
-            } catch (e) {
-                this.isPlaying = false;  // Reset on failure
-                console.warn('AudioWorklet setup failed, falling back to ScriptProcessor:', e.message);
             }
         }
 
-        // Fallback to ScriptProcessor
-        // Set isPlaying BEFORE setupScriptProcessor() to avoid race condition
-        // where onaudioprocess fires before isPlaying is set
-        this.isPlaying = true;
-        this.setupScriptProcessor();
+        this.checkPlaybackGeneration(generation);
+        this.setupScriptProcessor(generation);
     }
 
     //
     // Set up AudioWorklet for audio processing
     // @private
     //
-    async setupAudioWorklet() {
-        if (!this.audioContext._sidWorkletRegistered) {
-            const blob = new Blob([sidWorkletProcessorCode], { type: 'application/javascript' });
-            const workletUrl = URL.createObjectURL(blob);
-
-            try {
-                await this.audioContext.audioWorklet.addModule(workletUrl);
-                this.audioContext._sidWorkletRegistered = true;
-            } finally {
-                URL.revokeObjectURL(workletUrl);
-            }
+    async registerAudioWorklet(context) {
+        const blob = new Blob([sidWorkletProcessorCode], { type: 'application/javascript' });
+        const workletUrl = URL.createObjectURL(blob);
+        try {
+            await context.audioWorklet.addModule(workletUrl);
+        } finally {
+            URL.revokeObjectURL(workletUrl);
         }
+    }
 
-        this.workletNode = new AudioWorkletNode(this.audioContext, 'sid-worklet-processor');
-        this.workletNode.connect(this.audioContext.destination);
+    async setupAudioWorklet(generation) {
+        const context = this.audioContext;
+        if (!this._workletModulePromise) {
+            this._workletModulePromise = this.registerAudioWorklet(context);
+        }
+        const registration = this._workletModulePromise;
+        try {
+            await registration;
+        } catch (error) {
+            if (this._workletModulePromise === registration) this._workletModulePromise = null;
+            throw error;
+        }
+        this.checkPlaybackGeneration(generation);
 
+        const node = new AudioWorkletNode(context, 'sid-worklet-processor');
+        this.workletNode = node;
         this.workletSamples = new Float32Array(this.workletBufferSize);
-
-        this.workletNode.port.onmessage = (event) => {
-            if (event.data.type === 'needSamples') {
-                this.sendSamplesToWorklet();
+        node.port.onmessage = (event) => {
+            if (event.data.type === 'needSamples' && this.workletNode === node &&
+                generation === this._playGeneration) {
+                try {
+                    this.sendSamplesToWorklet(node);
+                } catch (error) {
+                    this.stop();
+                    console.error('SID playback failed:', error);
+                }
             }
         };
-
-        this.sendSamplesToWorklet();
         this.useWorklet = true;
+        this.isPlaying = true;
+        node.connect(context.destination);
+        this.checkPlaybackGeneration(generation);
     }
 
     //
     // Send samples to the AudioWorklet
     // @private
     //
-    sendSamplesToWorklet() {
-        if (!this.workletNode || !this.isPlaying) return;
-
+    sendSamplesToWorklet(node = this.workletNode) {
+        if (!node || node !== this.workletNode || !this.isPlaying) return;
         this.generateSamples(this.workletSamples);
+        if (node !== this.workletNode || !this.isPlaying) return;
 
         // slice() copies, so it is the copy that gets neutered by the transfer
         // and this.workletSamples stays usable for the next block.
         const buffer = this.workletSamples.buffer.slice(0);
-        this.workletNode.port.postMessage(
+        node.port.postMessage(
             { type: 'samples', buffer: buffer },
             [buffer]
         );
@@ -661,34 +734,61 @@ export class SIDPlayer {
     // Set up ScriptProcessor as fallback
     // @private
     //
-    setupScriptProcessor() {
+    setupScriptProcessor(generation) {
+        this.checkPlaybackGeneration(generation);
         const bufferSize = 4096;
-        this.scriptNode = this.audioContext.createScriptProcessor(bufferSize, 0, 1);
-
-        this.scriptNode.onaudioprocess = (e) => {
+        const node = this.audioContext.createScriptProcessor(bufferSize, 0, 1);
+        this.scriptNode = node;
+        node.onaudioprocess = (e) => {
             const output = e.outputBuffer.getChannelData(0);
-            this.generateSamples(output);
+            if (this.scriptNode !== node || generation !== this._playGeneration) {
+                output.fill(0);
+                return;
+            }
+            try {
+                this.generateSamples(output);
+            } catch (error) {
+                output.fill(0);
+                this.stop();
+                console.error('SID playback failed:', error);
+            }
         };
-
-        this.scriptNode.connect(this.audioContext.destination);
         this.useWorklet = false;
+        this.isPlaying = true;
+        node.connect(this.audioContext.destination);
+        this.checkPlaybackGeneration(generation);
     }
 
     //
     // Stop playback
+    // The tune stays loaded, but no pending startup may reconnect its audio nodes.
     //
     stop() {
+        ++this._playGeneration;
+        const cancel = this._cancelStart;
+        this._cancelStart = null;
+        this._playPromise = null;
+        if (cancel) cancel();
         this.isPlaying = false;
+        this.disconnectAudioNodes();
+        this.clearBufferedSamples();
+    }
 
+    disconnectAudioNodes() {
         if (this.workletNode) {
-            this.workletNode.disconnect();
+            const node = this.workletNode;
             this.workletNode = null;
+            node.port.onmessage = null;
+            node.port.close?.();
+            try { node.disconnect(); } catch {}
         }
-
         if (this.scriptNode) {
-            this.scriptNode.disconnect();
+            const node = this.scriptNode;
             this.scriptNode = null;
+            node.onaudioprocess = null;
+            try { node.disconnect(); } catch {}
         }
+        this.useWorklet = false;
     }
 
     //
@@ -697,8 +797,9 @@ export class SIDPlayer {
     //
     getState() {
         const frameCount = this._frameCount || 0;
-        const irqFreq = this.sidFile?.clock === CLOCK_NTSC ? 60 : 50;
-        const elapsedSeconds = frameCount / irqFreq;
+        const elapsedSeconds = this.machine
+            ? frameCount * this.machine.cyclesPerFrame / this.machine.clockFrequency
+            : 0;
 
         // Build full register array including read-only registers
         const regs = Array.from(this.registers);
@@ -711,11 +812,11 @@ export class SIDPlayer {
         if (this.machine && this.machine.sid) {
             try {
                 // OSC3: Upper 8 bits of voice 3 waveform output
-                const osc3 = this.machine.sid.read(0x1B);  // Read from offset $1B
+                const osc3 = this.machine.sid.peek(0x1B);
                 regs[27] = osc3;
 
                 // ENV3: Voice 3 envelope output (0-255)
-                const env3 = this.machine.sid.voice[2].envelope().output();
+                const env3 = this.machine.sid.peek(0x1C);
                 regs[28] = env3;
             } catch (e) {
                 // Ignore errors reading SID state

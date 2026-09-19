@@ -259,25 +259,18 @@ export class BASICTokenizer {
                 continue;
             }
 
-            // Try to match a keyword
+            if (ch === '?') {
+                tokens.push(KEYWORD_MAP.get('PRINT'));
+                i++;
+                continue;
+            }
+
+            // BASIC keywords have no identifier boundaries: PRINT1 and FORI are valid.
             const remaining = content.slice(i).toUpperCase();
             let matched = false;
 
             for (const keyword of SORTED_KEYWORDS) {
                 if (remaining.startsWith(keyword)) {
-                    // Make sure it's not part of a longer identifier
-                    const afterKeyword = remaining[keyword.length];
-                    const isAlphaNum = afterKeyword && /[A-Z0-9$%]/.test(afterKeyword);
-
-                    // Operators should ALWAYS be tokenized (they're single-char and can be followed by anything)
-                    const isOperator = ['+', '-', '*', '/', '^', '>', '=', '<'].includes(keyword);
-
-                    // Special case: some keywords can be followed by alphanumerics
-                    // (like GOTO10 or PRINT, but not things like PRINTER)
-                    if (isAlphaNum && !isOperator && !['GOTO', 'GOSUB', 'THEN', 'TO', 'STEP', 'ON', 'IF', 'AND', 'OR', 'NOT'].includes(keyword)) {
-                        continue;
-                    }
-
                     const token = KEYWORD_MAP.get(keyword);
                     tokens.push(token);
                     i += keyword.length;
@@ -614,27 +607,18 @@ function highlightLine(line, lineNum) {
             continue;
         }
 
+        if (ch === '?') {
+            tokens.push({ text: ch, type: TokenType.KEYWORD, line: lineNum });
+            i++;
+            continue;
+        }
+
         // Try to match a keyword
         const remaining = line.slice(i).toUpperCase();
         let matched = false;
 
         for (const keyword of SORTED_KEYWORDS) {
             if (remaining.startsWith(keyword)) {
-                // Check it's not part of a variable name
-                const afterKeyword = remaining[keyword.length];
-                const prevChar = i > 0 ? line[i - 1] : '';
-
-                // If previous char is alphanumeric, this is part of a variable
-                if (/[A-Z0-9]/.test(prevChar.toUpperCase())) {
-                    continue;
-                }
-
-                // Some keywords can be followed by alphanumerics (like GOTO10)
-                const canFollowAlpha = ['GOTO', 'GOSUB', 'THEN', 'TO', 'STEP', 'ON', 'IF', 'AND', 'OR', 'NOT'].includes(keyword);
-                if (!canFollowAlpha && afterKeyword && /[A-Z0-9]/.test(afterKeyword)) {
-                    continue;
-                }
-
                 // Determine token type
                 let type = TokenType.KEYWORD;
                 if (BASIC_FUNCTIONS.has(keyword)) {
@@ -680,6 +664,9 @@ function highlightLine(line, lineNum) {
         if (/[A-Za-z]/.test(ch)) {
             let variable = '';
             while (i < line.length && /[A-Za-z0-9]/.test(line[i])) {
+                if (variable && SORTED_KEYWORDS.some(keyword => line.slice(i).toUpperCase().startsWith(keyword))) {
+                    break;
+                }
                 variable += line[i];
                 i++;
             }

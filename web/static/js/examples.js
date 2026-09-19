@@ -19,6 +19,7 @@ export class ExampleLibrary {
         this.indexUrl = indexUrl;
         this.baseUrl = baseUrl;
         this.byId = new Map();
+        this.selectionId = 0;
     }
 
     //
@@ -64,15 +65,28 @@ export class ExampleLibrary {
     }
 
     //
-    // @returns {Promise<string>} The example's source text, or '' if unknown
+    // @returns {Promise<string>} The example's source text
     //
     async source(id) {
         const example = this.byId.get(id);
-        if (!example) return '';
+        if (!example) throw new Error(`Unknown example '${id}'`);
         const response = await fetch(this.baseUrl + example.file);
         if (!response.ok) {
             throw new Error(`Example '${id}': HTTP ${response.status}`);
         }
         return response.text();
+    }
+
+    // A slow response must not replace a more recent selection.
+    async select(id) {
+        const selectionId = ++this.selectionId;
+        try {
+            const source = await this.source(id);
+            if (selectionId !== this.selectionId) return null;
+            return { example: this.get(id), source };
+        } catch (error) {
+            if (selectionId !== this.selectionId) return null;
+            throw error;
+        }
     }
 }

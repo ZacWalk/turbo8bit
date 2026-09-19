@@ -19,25 +19,38 @@ from tests.test_utils import call_js_test_with_bytes
 class TestPSIDDriverExecution:
     """Tests for PSID driver execution and SID register writes."""
 
-    def test_psid_driver_runs_without_crash(self, sid_player_context, giana_sisters_bytes):
+    def test_psid_driver_runs_without_crash(
+        self, sid_player_context, giana_sisters_bytes
+    ):
         """Test that the PSID driver runs multiple frames without CPU crash."""
-        result = call_js_test_with_bytes(sid_player_context, "testPsidDriverExecution", giana_sisters_bytes, 100)
-        
-        assert result['success'], f"PSID driver crashed: {result['crashes']}, frame states: {result['frameResults']}"
-        assert len(result['crashes']) == 0, f"CPU crashes detected: {result['crashes']}"
-        assert not result['finalHalted'], f"CPU halted at PC=${hex(result['finalPC'])}"
+        result = call_js_test_with_bytes(
+            sid_player_context, "testPsidDriverExecution", giana_sisters_bytes, 100
+        )
 
-    def test_psid_driver_produces_sid_writes(self, sid_player_context, giana_sisters_bytes):
+        assert result[
+            "success"
+        ], f"PSID driver crashed: {result['crashes']}, frame states: {result['frameResults']}"
+        assert len(result["crashes"]) == 0, f"CPU crashes detected: {result['crashes']}"
+        assert not result["finalHalted"], f"CPU halted at PC=${hex(result['finalPC'])}"
+
+    def test_psid_driver_produces_sid_writes(
+        self, sid_player_context, giana_sisters_bytes
+    ):
         """Test that running the PSID driver produces writes to SID registers."""
-        result = call_js_test_with_bytes(sid_player_context, "testSidRegisterWrites", giana_sisters_bytes, 50)
-        
+        result = call_js_test_with_bytes(
+            sid_player_context, "testSidRegisterWrites", giana_sisters_bytes, 50
+        )
+
         # Should have at least some SID writes
-        assert result['totalWrites'] > 0, f"No SID writes detected for {result['tuneName']}"
-        
+        assert (
+            result["totalWrites"] > 0
+        ), f"No SID writes detected for {result['tuneName']}"
+
         # Should have writes to voice control or frequency registers
-        assert result['hasVoiceControl'] or result['hasFrequency'], \
-            f"No voice/frequency writes. Register counts: {result['registerCounts']}"
-        
+        assert (
+            result["hasVoiceControl"] or result["hasFrequency"]
+        ), f"No voice/frequency writes. Register counts: {result['registerCounts']}"
+
         print(f"SID writes for '{result['tuneName']}': {result['totalWrites']} total")
         print(f"Register breakdown: {result['registerCounts']}")
 
@@ -45,8 +58,9 @@ class TestPSIDDriverExecution:
         """Test that the PSID driver sets the SID volume register."""
         ctx = sid_player_context
         ctx.eval(f"var sidBytes = {json.dumps(giana_sisters_bytes)};")
-        
-        result_json = ctx.eval("""
+
+        result_json = ctx.eval(
+            """
             JSON.stringify((function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var machine = new C64Machine({ sampleRate: 44100 });
@@ -55,23 +69,17 @@ class TestPSIDDriverExecution:
                 var tune = machine.loadSidTune(buffer);
                 
                 // Run a few frames to let init complete
+                var audioBuffer = new Int16Array(4096);
                 for (var frame = 0; frame < 10; frame++) {
-                    machine.runFrame();
+                    machine.runFrame(audioBuffer);
                 }
                 
-                // Read the volume register (offset $18 in SID, address $D418)
-                // The driver sets LDA #$0F, STA $D418 for max volume
-                var volumeReg = machine.ram[0xD400 + 0x18];  // Won't work - I/O mapped
-                
-                // Better approach: check via SID read
-                // Actually, check the RAM at the driver code location to verify
-                // the driver was installed correctly
-                
                 // Find the volume write in the driver (LDA #$0F, STA $D418)
-                // Starting at $0400, scan for A9 0F 8D 18 D4
-                var driverStart = 0x0400;
+                var driver = generatePsidDriver(tune, tune.startSong - 1);
+                var driverStart = driver.cpuState.PC;
+                var driverLength = driver.regions.find(r => r.address === driverStart).data.length;
                 var foundVolumeInit = false;
-                for (var i = 0; i < 100; i++) {
+                for (var i = 0; i <= driverLength - 5; i++) {
                     if (machine.ram[driverStart + i] === 0xA9 && 
                         machine.ram[driverStart + i + 1] === 0x0F &&
                         machine.ram[driverStart + i + 2] === 0x8D &&
@@ -89,23 +97,26 @@ class TestPSIDDriverExecution:
                     cpuHalted: machine.cpu.halted
                 };
             })())
-        """)
+        """
+        )
         result = json.loads(result_json)
-        
-        assert result['foundVolumeInit'], "PSID driver should set volume to max ($0F)"
-        assert not result['cpuHalted'], f"CPU halted at PC=${hex(result['cpuPC'])}"
 
-    def test_psid_driver_irq_handler_installed(self, sid_player_context, giana_sisters_bytes):
+        assert result["foundVolumeInit"], "PSID driver should set volume to max ($0F)"
+        assert not result["cpuHalted"], f"CPU halted at PC=${hex(result['cpuPC'])}"
+
+    def test_psid_driver_irq_handler_installed(
+        self, sid_player_context, giana_sisters_bytes
+    ):
         """Test that the PSID driver installs IRQ handler correctly.
-        
-        The PSID driver uses a two-handler design:
-        - $03B0: Full hardware IRQ handler (pushes A/X/Y, handles direct hardware IRQs)
-        - $0390: Simple handler for KERNAL dispatch (no register save, called via $0314)
+
+        Both the hardware and KERNAL-dispatch handlers follow the tune's
+        relocation metadata instead of assuming fixed low-RAM addresses.
         """
         ctx = sid_player_context
         ctx.eval(f"var sidBytes = {json.dumps(giana_sisters_bytes)};")
-        
-        result_json = ctx.eval("""
+
+        result_json = ctx.eval(
+            """
             JSON.stringify((function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var machine = new C64Machine({ sampleRate: 44100 });
@@ -123,12 +134,11 @@ class TestPSIDDriverExecution:
                 var softBrkVector = machine.ram[0x0316] | (machine.ram[0x0317] << 8);
                 var softNmiVector = machine.ram[0x0318] | (machine.ram[0x0319] << 8);
                 
-                // Hardware IRQ vector should point to full handler at $03B0
-                var irqHandlerExpected = 0x03B0;
-                // Software IRQ vector (KERNAL dispatch) should be simple handler at $0390
-                var softIrqExpected = 0x0390;
-                var nmiHandlerExpected = 0x0380;
-                var driverExpected = 0x0400;
+                var addresses = generatePsidDriver(tune, tune.startSong - 1).addresses;
+                var irqHandlerExpected = addresses.irqFull;
+                var softIrqExpected = addresses.irq;
+                var nmiHandlerExpected = addresses.nmi;
+                var driverExpected = addresses.driver;
                 
                 return {
                     tuneName: tune.name,
@@ -144,24 +154,32 @@ class TestPSIDDriverExecution:
                     resetVectorCorrect: resetVector === driverExpected
                 };
             })())
-        """)
+        """
+        )
         result = json.loads(result_json)
-        
-        assert result['irqVectorCorrect'], \
-            f"Hardware IRQ vector should be $03B0, got ${hex(result['irqVector'])}"
-        assert result['softIrqVectorCorrect'], \
-            f"Software IRQ vector ($0314) should be $0390, got ${hex(result['softIrqVector'])}"
-        assert result['nmiVectorCorrect'], \
-            f"NMI vector should be $0380, got ${hex(result['nmiVector'])}"
-        assert result['resetVectorCorrect'], \
-            f"RESET vector should be $0400, got ${hex(result['resetVector'])}"
 
-    def test_psid_driver_calls_play_routine(self, sid_player_context, giana_sisters_bytes):
+        assert result[
+            "irqVectorCorrect"
+        ], f"Hardware IRQ vector does not match the driver: ${hex(result['irqVector'])}"
+        assert result[
+            "softIrqVectorCorrect"
+        ], f"Software IRQ vector does not match the driver: ${hex(result['softIrqVector'])}"
+        assert result[
+            "nmiVectorCorrect"
+        ], f"NMI vector does not match the driver: ${hex(result['nmiVector'])}"
+        assert result[
+            "resetVectorCorrect"
+        ], f"RESET vector does not match the driver: ${hex(result['resetVector'])}"
+
+    def test_psid_driver_calls_play_routine(
+        self, sid_player_context, giana_sisters_bytes
+    ):
         """Test that the play routine is called during frame execution."""
         ctx = sid_player_context
         ctx.eval(f"var sidBytes = {json.dumps(giana_sisters_bytes)};")
-        
-        result_json = ctx.eval("""
+
+        result_json = ctx.eval(
+            """
             JSON.stringify((function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var machine = new C64Machine({ sampleRate: 44100 });
@@ -169,13 +187,14 @@ class TestPSIDDriverExecution:
                 // Load the tune
                 var tune = machine.loadSidTune(buffer);
                 var playAddr = tune.playAddress;
+                var audioBuffer = new Int16Array(4096);
                 
                 // For RSID with playAddr=0, use a different approach
                 if (playAddr === 0) {
                     // RSID tunes set up their own IRQ handler, so we just
                     // verify the driver runs frames without crashing
                     for (var frame = 0; frame < 20; frame++) {
-                        machine.runFrame();
+                        machine.runFrame(audioBuffer);
                     }
                     return {
                         tuneName: tune.name,
@@ -197,7 +216,7 @@ class TestPSIDDriverExecution:
                 // Run frames normally - runFrame() handles CIA timer and IRQs internally
                 for (var frame = 0; frame < 20; frame++) {
                     framesRun++;
-                    machine.runFrame();
+                    machine.runFrame(audioBuffer);
                     if (machine.cpu.halted) break;
                 }
                 
@@ -215,16 +234,21 @@ class TestPSIDDriverExecution:
                     expectsCalls: playAddr !== 0
                 };
             })())
-        """)
+        """
+        )
         result = json.loads(result_json)
-        
+
         # The tune should run without the CPU halting
-        assert not result['cpuHalted'], "CPU should not halt during playback"
-        
-        if result['expectsCalls']:
-            print(f"PSID tune '{result['tuneName']}' - driver ran {result['framesRun']} frames")
+        assert not result["cpuHalted"], "CPU should not halt during playback"
+
+        if result["expectsCalls"]:
+            print(
+                f"PSID tune '{result['tuneName']}' - driver ran {result['framesRun']} frames"
+            )
         else:
-            print(f"RSID tune '{result['tuneName']}' - play routine handled by tune's own IRQ handler")
+            print(
+                f"RSID tune '{result['tuneName']}' - play routine handled by tune's own IRQ handler"
+            )
 
 
 class TestPSIDDriverMultipleTunes:
@@ -234,8 +258,9 @@ class TestPSIDDriverMultipleTunes:
         """Test PSID driver with Cybernoid."""
         ctx = sid_player_context
         ctx.eval(f"var sidBytes = {json.dumps(cybernoid_bytes)};")
-        
-        result_json = ctx.eval("""
+
+        result_json = ctx.eval(
+            """
             JSON.stringify((function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var machine = new C64Machine({ sampleRate: 44100 });
@@ -251,8 +276,9 @@ class TestPSIDDriverMultipleTunes:
                 var tune = machine.loadSidTune(buffer);
                 
                 // Run 50 frames
+                var audioBuffer = new Int16Array(4096);
                 for (var frame = 0; frame < 50; frame++) {
-                    machine.runFrame();
+                    machine.runFrame(audioBuffer);
                 }
                 
                 return {
@@ -262,23 +288,29 @@ class TestPSIDDriverMultipleTunes:
                     success: sidWriteCount > 0 && !machine.cpu.halted
                 };
             })())
-        """)
+        """
+        )
         result = json.loads(result_json)
-        
-        assert result['success'], f"Cybernoid driver failed: writes={result['sidWriteCount']}, halted={result['cpuHalted']}"
-        assert result['sidWriteCount'] > 10, f"Expected more SID writes, got {result['sidWriteCount']}"
+
+        assert result[
+            "success"
+        ], f"Cybernoid driver failed: writes={result['sidWriteCount']}, halted={result['cpuHalted']}"
+        assert (
+            result["sidWriteCount"] > 10
+        ), f"Expected more SID writes, got {result['sidWriteCount']}"
 
     def test_last_ninja_driver(self, sid_player_context, last_ninja_bytes):
         """Test PSID driver with Last Ninja.
-        
+
         This test currently fails because the Last Ninja tune causes the CPU to halt.
         This is a known issue that needs investigation - the tune may require
         specific C64 hardware features not yet implemented.
         """
         ctx = sid_player_context
         ctx.eval(f"var sidBytes = {json.dumps(last_ninja_bytes)};")
-        
-        result_json = ctx.eval("""
+
+        result_json = ctx.eval(
+            """
             JSON.stringify((function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var machine = new C64Machine({ sampleRate: 44100 });
@@ -296,10 +328,11 @@ class TestPSIDDriverMultipleTunes:
                 // Track CPU state
                 var haltedFrame = -1;
                 var haltPC = 0;
+                var audioBuffer = new Int16Array(4096);
                 
                 // Run 50 frames
                 for (var frame = 0; frame < 50; frame++) {
-                    machine.runFrame();
+                    machine.runFrame(audioBuffer);
                     if (machine.cpu.halted && haltedFrame === -1) {
                         haltedFrame = frame;
                         haltPC = machine.cpu.PC;
@@ -318,16 +351,25 @@ class TestPSIDDriverMultipleTunes:
                     success: sidWriteCount > 0 && !machine.cpu.halted
                 };
             })())
-        """)
+        """
+        )
         result = json.loads(result_json)
-        
+
         # Log diagnostic info for debugging
-        if not result['success']:
+        if not result["success"]:
             print(f"\nLast Ninja driver diagnostic info:")
             print(f"  Name: {result['tuneName']}")
-            print(f"  Load: ${hex(result['loadAddress'])}, Init: ${hex(result['initAddress'])}, Play: ${hex(result['playAddress'])}")
+            print(
+                f"  Load: ${hex(result['loadAddress'])}, Init: ${hex(result['initAddress'])}, Play: ${hex(result['playAddress'])}"
+            )
             print(f"  SID writes: {result['sidWriteCount']}")
-            print(f"  Halted at frame {result['haltedFrame']}, PC=${hex(result['haltPC'])}")
-        
-        assert result['success'], f"Last Ninja driver failed: writes={result['sidWriteCount']}, halted={result['cpuHalted']}"
-        assert result['sidWriteCount'] > 10, f"Expected more SID writes, got {result['sidWriteCount']}"
+            print(
+                f"  Halted at frame {result['haltedFrame']}, PC=${hex(result['haltPC'])}"
+            )
+
+        assert result[
+            "success"
+        ], f"Last Ninja driver failed: writes={result['sidWriteCount']}, halted={result['cpuHalted']}"
+        assert (
+            result["sidWriteCount"] > 10
+        ), f"Expected more SID writes, got {result['sidWriteCount']}"

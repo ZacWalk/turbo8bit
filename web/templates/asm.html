@@ -16,9 +16,10 @@
                     aria-label="Commodore 64 screen. Focus it and type to use the C64 keyboard."></canvas>
             
             <div class="c64-controls asm-controls">
-                <button id="muteBtn" class="mute-btn muted" onclick="toggleMute()">🔇 MUTED</button>
-                <button class="reset-btn" onclick="emulator.reset()">RESET</button>
+                <button id="muteBtn" class="mute-btn muted" aria-pressed="false">🔇 MUTED</button>
+                <button class="reset-btn" onclick="resetEmulator()">RESET</button>
             </div>
+            <p id="emulator-status" class="c64-status" role="status"></p>
             
             <!-- Register display -->
             <div class="register-display" id="registerDisplay">
@@ -181,7 +182,7 @@
 import { C64Emulator } from "{{ url_for('static', filename='js/emulator/emulator.js') }}";
 import { CodeEditor } from "{{ url_for('static', filename='js/emulator/editor.js') }}";
 import { Assembler, disassembleInstruction } from "{{ url_for('static', filename='js/emulator/assembler.js') }}";
-import { C64Debugger, DebuggerState } from "{{ url_for('static', filename='js/emulator/debugger.js') }}";
+import { C64Debugger, DebuggerState, isTopLevelRTS } from "{{ url_for('static', filename='js/emulator/debugger.js') }}";
 import { FLAG_N, FLAG_V, FLAG_B, FLAG_D, FLAG_I, FLAG_Z, FLAG_C } from "{{ url_for('static', filename='js/emulator/mos6510.js') }}";
 import { ExampleLibrary } from "{{ url_for('static', filename='js/examples.js') }}";
 
@@ -196,7 +197,10 @@ const examples = new ExampleLibrary(
 const emulator = new C64Emulator('screen', { audioEnabled: false });
 emulator.start();
 emulator.enableDragAndDrop();
+emulator.enableKeyboard();
 window.emulator = emulator;
+const emulatorStatus = document.getElementById('emulator-status');
+emulator.bindMuteButton(document.getElementById('muteBtn'), emulatorStatus);
 
 // Initialize assembler and debugger
 const assembler = new Assembler();
@@ -216,15 +220,22 @@ const editor = new CodeEditor('#asm-editor', {
 window.editor = editor;
 
 const sampleSelect = document.getElementById('sampleSelect');
+let currentExampleKey = null;
 
 async function initExamples() {
     try {
         await examples.populate(sampleSelect);
+        if (editor.getValue()) {
+            currentExampleKey = null;
+            sampleSelect.value = '';
+            emulatorStatus.textContent = 'Samples are ready. Your code has been kept.';
+            return;
+        }
         sampleSelect.value = DEFAULT_EXAMPLE;
         await loadSelectedSample();
     } catch (e) {
         console.error(e);
-        editor.setValue('; Could not load the sample programs.');
+        emulatorStatus.textContent = 'Could not load the sample programs. You can still write your own code.';
     }
 }
 initExamples();
@@ -232,11 +243,25 @@ initExamples();
 // Load sample from dropdown
 async function loadSelectedSample() {
     const id = sampleSelect.value;
-    if (!examples.get(id)) return;
-    editor.setValue(await examples.source(id));
-    // Clear any existing debug state
-    editor.clearHighlight();
-    currentSourceMap = null;
+    const previousSource = editor.getValue();
+    try {
+        const selection = await examples.select(id);
+        if (!selection) return;
+        if (editor.getValue() !== previousSource) {
+            sampleSelect.value = currentExampleKey ?? '';
+            emulatorStatus.textContent = 'Sample loading was cancelled because you edited the code. Your code has been kept.';
+            return;
+        }
+        currentExampleKey = id;
+        editor.setValue(selection.source);
+        clearDebugState();
+        currentSourceMap = null;
+        emulatorStatus.textContent = '';
+    } catch (error) {
+        console.error('Failed to load sample:', error);
+        sampleSelect.value = currentExampleKey ?? '';
+        emulatorStatus.textContent = 'Could not load the sample. Your code has been kept.';
+    }
 }
 window.loadSelectedSample = loadSelectedSample;
 
@@ -247,6 +272,7 @@ window.loadSelectedSample = loadSelectedSample;
 // Track debug state
 let isDebugMode = false;
 let initialSP = 0;  // Stack pointer when we started stepping (to detect RTS completion)
+let executionRequest = 0;
 
 // Non-empty when execution ended abnormally; shown instead of the disassembly.
 let statusMessage = '';
@@ -262,6 +288,10 @@ function assembleEditor() {
     const result = assembler.assemble(editor.getValue());
     if (!result.success) {
         alert('Assembly errors:\n' + result.errors.map(e => `Line ${e.lineNum}: ${e.message}`).join('\n'));
+        return null;
+    }
+    if (result.bytes.length === 0) {
+        alert('No machine code to run');
         return null;
     }
     currentSourceMap = result.sourceMap;
@@ -288,34 +318,62 @@ function loadAndEnter(result) {
     statusMessage = '';
 }
 
+async function enterProgram(result, stepping) {
+    const request = ++executionRequest;
+    const generation = emulator.bootGeneration;
+    try {
+        if (!emulator.basicReady) emulatorStatus.textContent = 'Starting the C64. Waiting for BASIC READY...';
+        await emulator.whenBasicReady();
+        if (request !== executionRequest || generation !== emulator.bootGeneration) return;
+
+        initialSP = emulator.machine.cpu.SP;
+        loadAndEnter(result);
+        isDebugMode = stepping;
+        editor.clearHighlight();
+        if (stepping) {
+            emulator.pause();
+            debugger_.codeStart = result.startAddress;
+            debugger_.codeEnd = result.startAddress + result.bytes.length;
+            debugger_.codeBytes = result.bytes;
+            debugger_.state = DebuggerState.PAUSED;
+        } else {
+            debugger_.codeBytes = null;
+            emulator.resume();
+        }
+        emulatorStatus.textContent = '';
+        updateButtonHighlight(stepping ? 'step' : 'run');
+    } catch (error) {
+        if (request !== executionRequest || generation !== emulator.bootGeneration) return;
+        console.error('Could not start assembly program:', error);
+        emulatorStatus.textContent = error.message;
+    }
+}
+
 function assembleAndRun() {
     const result = assembleEditor();
-    if (!result) return;
-
-    isDebugMode = false;
-    editor.clearHighlight();
-    debugger_.codeBytes = null;
-    emulator.resume();
-
-    loadAndEnter(result);
-    updateButtonHighlight('run');
+    if (result) return enterProgram(result, false);
 }
 window.assembleAndRun = assembleAndRun;
 
 //
-// Stop stepping if the CPU crashed or the program RTS'd back to BASIC.
+// Only an actual top-level RTS may finish stepping, not a TXS or interrupt.
 // @returns {boolean} True if execution has finished
 //
-function stepFinished() {
+function stepAndCheckReturn() {
     const cpu = emulator.machine.cpu;
+    const opcode = emulator.machine.peek(cpu.PC);
+    const spBefore = cpu.SP;
+    cpu.step();
     if (cpu.halted) {
         statusMessage = '*crash*';
         debugger_.state = DebuggerState.HALTED;
         updateButtonHighlight(null);
         return true;
     }
-    if (cpu.SP === initialSP) {
-        debuggerStop();
+    if (isTopLevelRTS(opcode, spBefore, cpu.SP, (initialSP - 2) & 0xff)
+        && cpu.PC === BASIC_WARM_START) {
+        clearDebugState();
+        emulator.resume();
         return true;
     }
     return false;
@@ -330,41 +388,28 @@ function debuggerStep() {
         return;
     }
 
-    // Enter debug mode - pause the emulator's main loop
-    isDebugMode = true;
-    emulator.pause();
-
     if (!debugger_.codeBytes) {
         const result = assembleEditor();
         if (!result) return;
 
-        initialSP = cpu.SP;  // Detect the closing RTS by watching for this level
-        loadAndEnter(result);
-
-        debugger_.codeStart = result.startAddress;
-        debugger_.codeEnd = result.startAddress + result.bytes.length;
-        debugger_.codeBytes = result.bytes;
-        debugger_.state = DebuggerState.PAUSED;
-
-        updateButtonHighlight('step');
-        return;
+        return enterProgram(result, true);
     }
 
+    isDebugMode = true;
+    emulator.pause();
     const isJsr = emulator.machine.peek(cpu.PC) === 0x20;
     const target = emulator.machine.peek(cpu.PC + 1) | (emulator.machine.peek(cpu.PC + 2) << 8);
     const stepsInto = !isJsr
         || (target >= debugger_.codeStart && target < debugger_.codeEnd);
 
     if (stepsInto) {
-        cpu.step();
-        if (stepFinished()) return;
+        if (stepAndCheckReturn()) return;
     } else {
         // Step over: run the KERNAL/BASIC routine until the stack unwinds.
         const preJsrSP = cpu.SP;
         let budget = 1000000;
         do {
-            cpu.step();
-            if (stepFinished()) return;
+            if (stepAndCheckReturn()) return;
         } while (cpu.SP !== preJsrSP && --budget > 0);
 
         if (budget <= 0) {
@@ -378,23 +423,41 @@ function debuggerStep() {
 }
 window.debuggerStep = debuggerStep;
 
-function debuggerStop() {
-    // Exit debug mode and return to normal emulation
+function clearDebugState() {
+    executionRequest++;
     isDebugMode = false;
-    
-    // Resume the emulator's normal operation
-    emulator.resume();
-    
-    // Reset debugger state so next Step starts fresh
     debugger_.codeBytes = null;
     debugger_.state = DebuggerState.STOPPED;
     initialSP = 0;
     statusMessage = '';
+    shownLine = undefined;
 
     editor.clearHighlight();
     updateButtonHighlight(null);
 }
+
+emulator.onReset = () => {
+    clearDebugState();
+    currentSourceMap = null;
+};
+
+async function debuggerStop() {
+    emulatorStatus.textContent = 'Returning to BASIC...';
+    // Arbitrary assembly can halt the CPU, bank out ROM, or replace IRQ vectors.
+    // A cold reset is the reliable abort path; the editor source is preserved.
+    const ready = emulator.resetToBasic();
+    const generation = emulator.bootGeneration;
+    try {
+        await ready;
+        if (generation === emulator.bootGeneration) emulatorStatus.textContent = '';
+    } catch (error) {
+        if (generation !== emulator.bootGeneration) return;
+        console.error('Could not return to BASIC:', error);
+        emulatorStatus.textContent = error.message;
+    }
+}
 window.debuggerStop = debuggerStop;
+window.resetEmulator = debuggerStop;
 
 // ============================================================================
 // Debugger UI Updates
@@ -502,54 +565,11 @@ function debugLoop() {
 }
 
 // ============================================================================
-// Audio Controls
-// ============================================================================
-
-let isMuted = true;
-
-function toggleMute() {
-    isMuted = !isMuted;
-    const btn = document.getElementById('muteBtn');
-    if (isMuted) {
-        btn.textContent = '🔇 MUTED';
-        btn.classList.add('muted');
-        emulator.disableAudio();
-    } else {
-        btn.textContent = '🔊 SOUND';
-        btn.classList.remove('muted');
-        emulator.enableAudio();
-    }
-}
-window.toggleMute = toggleMute;
-
-// ============================================================================
-// Keyboard handling
-// ============================================================================
-
-document.addEventListener('keydown', e => {
-    // Don't capture keys when typing in the editor
-    if (e.target?.classList?.contains('editor-textarea')) {
-        return;
-    }
-    emulator.handleKeyPress(e);
-});
-
-document.addEventListener('keyup', e => {
-    // Not gated on the editor: a key pressed on the emulator and released after
-    // focus moved into the editor still has to be lifted off the matrix.
-    emulator.handleKeyRelease(e);
-});
-
-// Alt-tabbing away while holding a key would otherwise leave it stuck down.
-window.addEventListener('blur', () => emulator.releaseAllKeys());
-
-// ============================================================================
 // Initialization
 // ============================================================================
 
 window.addEventListener('load', () => {
-    document.body.tabIndex = 0;
-    document.body.focus();
+    emulator.canvas.focus({ preventScroll: true });
 
     updateButtonHighlight(null);
     debugLoop();

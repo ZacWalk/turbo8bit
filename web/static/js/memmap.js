@@ -77,6 +77,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         carhiE: { start: 0xE000, end: 0xFFFF, name: 'CARTRIDGE ROM HI', size: '8 KB' }
     };
 
+    const regionDescriptions = {
+        zeropage: 'Zero page allows shorter, faster CPU instructions. BASIC and the KERNAL keep working variables here. $0000 and $0001 are the 6510 data-direction register and CPU port, not ordinary RAM.',
+        stack: 'The hardware stack occupies $0100-$01FF. The CPU pushes return addresses and saved registers here; its 8-bit stack pointer moves downward on a push and upward on a pull.',
+        lowram: 'RAM used by system workspaces, the default screen at $0400, and BASIC programs beginning at $0801. In Ultimax mode, only $0000-$0FFF remains connected to onboard RAM.',
+        ram: 'Onboard RAM selected for CPU reads and writes. Banking ROM out exposes the RAM underneath; it does not erase it.',
+        highram: 'This 4KB RAM area is normally available alongside BASIC and the KERNAL, making it useful for machine-code programs. It is unmapped in Ultimax mode.',
+        basic: 'The 8KB BASIC V2 interpreter. Without a 16KB or Ultimax cartridge, both LORAM and HIRAM must be high to select BASIC ROM. Writes go to the underlying RAM, not the ROM.',
+        kernal: 'The 8KB KERNAL operating system provides I/O routines, keyboard scanning and interrupt handling. HIRAM selects it except in Ultimax mode. Writes go to underlying RAM.',
+        io: 'Memory-mapped VIC-II, SID, color RAM and CIA registers, plus the cartridge I/O windows. Reads and writes access the devices rather than the RAM underneath. Some reads have side effects.',
+        charrom: 'The CPU can read the built-in character shapes here when the PLA selects character ROM. Writes still go to RAM underneath. The VIC-II has a separate view of character ROM in banks 0 and 2.',
+        'cart-lo': 'The cartridge ROML window. In 8KB and 16KB modes it is selected when both LORAM and HIRAM are high; in Ultimax mode it is always selected. Cartridge hardware determines write behavior.',
+        'cart-hi': 'The cartridge ROMH window: $A000-$BFFF in 16KB mode when HIRAM is high, or $E000-$FFFF in Ultimax mode regardless of the CPU port. Cartridge hardware determines write behavior.',
+        unmapped: 'No onboard RAM or ROM is selected here in Ultimax mode. Reads are open bus, not ordinary RAM; the observed value depends on bus activity and cartridge hardware.'
+    };
+
     // Get DOM elements
     const bitButtons = document.querySelectorAll('.bit-btn');
     const signalButtons = document.querySelectorAll('.signal-btn');
@@ -86,9 +101,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const portValueDisplay = document.getElementById('port-value');
     const vicRangeDisplay = document.getElementById('vic-range');
     const configSummary = document.getElementById('config-summary');
-
-    // Track previous layout to detect changes
-    let previousLayout = null;
 
     // Initialize
     updateMemoryMap();
@@ -111,8 +123,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.addEventListener('click', () => {
                 const bank = parseInt(btn.dataset.bank);
                 state.vicBank = bank;
-                vicBankButtons.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
                 updateMemoryMap();
             });
         });
@@ -122,7 +132,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.addEventListener('click', () => {
                 const signal = btn.dataset.signal;
                 state[signal] = !state[signal];
-                btn.classList.toggle('active', state[signal]);
+                updateSignalButtons();
                 clearActivePreset();
                 updateMemoryMap();
             });
@@ -133,14 +143,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.addEventListener('click', () => {
                 const preset = btn.dataset.preset;
                 applyPreset(preset);
-                presetButtons.forEach(p => p.classList.remove('active'));
-                btn.classList.add('active');
+                presetButtons.forEach(p => setActive(p, p === btn));
             });
         });
     }
 
     function clearActivePreset() {
-        presetButtons.forEach(p => p.classList.remove('active'));
+        presetButtons.forEach(p => setActive(p, false));
+    }
+
+    function setActive(button, active) {
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
     }
 
     function applyPreset(preset) {
@@ -197,7 +211,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function updateBitButtons() {
         bitButtons.forEach(btn => {
             const bit = btn.dataset.bit;
-            btn.classList.toggle('active', state[bit]);
+            setActive(btn, state[bit]);
             const valueSpan = btn.querySelector('.bit-value');
             if (valueSpan) {
                 valueSpan.textContent = state[bit] ? '1' : '0';
@@ -208,7 +222,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function updateSignalButtons() {
         signalButtons.forEach(btn => {
             const signal = btn.dataset.signal;
-            btn.classList.toggle('active', state[signal]);
+            setActive(btn, state[signal]);
         });
     }
 
@@ -221,8 +235,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function getMemoryLayout() {
-        // Determine what's visible at each memory region based on PLA logic
+        // Cartridge booleans mean asserted LOW; CPU-port booleans mean HIGH.
+        // These are CPU read selections. ROM writes and the VIC use other paths.
+        const ultimax = state.game && !state.exrom;
+        const cart16k = state.game && state.exrom;
+        const roml = ultimax || (state.exrom && state.loram && state.hiram);
+        const romh = cart16k && state.hiram;
+        const basic = !state.game && state.loram && state.hiram;
+        const characterRom = !state.charen && (state.hiram || (!state.game && state.loram));
         const layout = [];
+        const unmapped = (start, end, size) => ({
+            start, end, size, name: 'UNMAPPED', type: 'unmapped', infoId: 'unmapped'
+        });
 
         // $0000-$00FF: Zero Page
         layout.push({ ...regions.zeropage, type: 'ram', infoId: 'zeropage' });
@@ -230,62 +254,52 @@ document.addEventListener('DOMContentLoaded', async () => {
         // $0100-$01FF: Stack (grows downward)
         layout.push({ ...regions.stack, type: 'ram', infoId: 'stack' });
 
-        // $0200-$7FFF: Always RAM
-        layout.push({ ...regions.lowram, type: 'ram', infoId: 'lowram' });
+        if (ultimax) {
+            layout.push({
+                start: 0x0200, end: 0x0FFF, name: 'RAM', size: '3.5 KB',
+                type: 'ram', infoId: 'lowram'
+            });
+            layout.push(unmapped(0x1000, 0x7FFF, '28 KB'));
+        } else {
+            layout.push({ ...regions.lowram, type: 'ram', infoId: 'lowram' });
+        }
 
         // $8000-$9FFF: RAM, or Cart ROML
-        if (state.exrom && !state.game) {
-            // Cartridge ROML visible
-            layout.push({ ...regions.cartlo, type: 'cart-lo', infoId: 'cart-lo' });
-        } else if (state.game && !state.exrom) {
-            // Ultimax mode - ROML visible
+        if (roml) {
             layout.push({ ...regions.cartlo, type: 'cart-lo', infoId: 'cart-lo' });
         } else {
             layout.push({ ...regions.ram8000, type: 'ram', infoId: 'ram' });
         }
 
         // $A000-$BFFF: RAM, BASIC, or Cart ROMH
-        if (state.game && !state.exrom) {
-            // Ultimax mode - nothing here (open bus), show as RAM
-            layout.push({ ...regions.ramA000, type: 'ram', infoId: 'ram' });
-        } else if (state.exrom && !state.game && state.hiram && state.loram) {
-            // 16K cart mode - ROMH at $A000
+        if (ultimax) {
+            layout.push(unmapped(0xA000, 0xBFFF, '8 KB'));
+        } else if (romh) {
             layout.push({ ...regions.carthi, type: 'cart-hi', infoId: 'cart-hi' });
-        } else if (state.loram && state.hiram) {
-            // BASIC visible only when both LORAM=1 AND HIRAM=1
+        } else if (basic) {
             layout.push({ ...regions.basic, type: 'basic', infoId: 'basic' });
         } else {
             // RAM visible when LORAM=0 OR HIRAM=0
             layout.push({ ...regions.ramA000, type: 'ram', infoId: 'ram' });
         }
 
-        // $C000-$CFFF: Always RAM
-        layout.push({ ...regions.highram, type: 'ram', infoId: 'highram' });
+        layout.push(ultimax
+            ? unmapped(0xC000, 0xCFFF, '4 KB')
+            : { ...regions.highram, type: 'ram', infoId: 'highram' });
 
         // $D000-$DFFF: I/O, Char ROM, or RAM
-        // I/O visible when (HIRAM=1 OR LORAM=1) AND CHAREN=1
-        // CHAR ROM visible when (HIRAM=1 OR LORAM=1) AND CHAREN=0
-        // RAM visible when HIRAM=0 AND LORAM=0
-        if (state.game && !state.exrom) {
-            // Ultimax mode - I/O always visible
+        // In 16KB mode, LORAM alone cannot select character ROM.
+        if (ultimax || (state.charen && (state.loram || state.hiram))) {
             layout.push({ ...regions.io, type: 'io', infoId: 'io' });
-        } else if (!state.hiram && !state.loram) {
-            // All RAM mode
-            layout.push({ ...regions.ramD000, type: 'ram', infoId: 'ram' });
-        } else if (state.charen) {
-            layout.push({ ...regions.io, type: 'io', infoId: 'io' });
-        } else {
+        } else if (characterRom) {
             layout.push({ ...regions.charrom, type: 'charrom', infoId: 'charrom' });
+        } else {
+            layout.push({ ...regions.ramD000, type: 'ram', infoId: 'ram' });
         }
 
         // $E000-$FFFF: KERNAL, RAM, or Cart ROMH (Ultimax)
-        if (state.game && !state.exrom) {
-            // Ultimax mode - ROMH at $E000
-            layout.push({
-                start: 0xE000, end: 0xFFFF,
-                name: 'CARTRIDGE ROM HI', size: '8 KB',
-                type: 'cart-hi', infoId: 'cart-hi'
-            });
+        if (ultimax) {
+            layout.push({ ...regions.carhiE, type: 'cart-hi', infoId: 'cart-hi' });
         } else if (state.hiram) {
             layout.push({ ...regions.kernal, type: 'kernal', infoId: 'kernal' });
         } else {
@@ -293,6 +307,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         return layout;
+    }
+
+    function formatAddress(address) {
+        return '$' + address.toString(16).toUpperCase().padStart(4, '0');
+    }
+
+    function formatRange(start, end) {
+        return `${formatAddress(start)}-${formatAddress(end)}`;
+    }
+
+    function createMemoryButton(className, label, key, address, inspect) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = className;
+        button.setAttribute('aria-label', label);
+        button.dataset.focusKey = key;
+        button.dataset.address = address;
+        button.addEventListener('click', inspect);
+        button.addEventListener('focus', inspect);
+        button.addEventListener('mouseenter', inspect);
+        return button;
     }
 
     //
@@ -401,12 +436,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function updateMemoryMap() {
+        const focused = document.activeElement;
+        const focusKey = memoryTableBody.contains(focused) ? focused.dataset.focusKey : null;
+        const focusAddress = focusKey ? Number(focused.dataset.address) : null;
         const layout = getMemoryLayout();
         const portValue = calculatePortValue();
         const gridRows = getGridRows();
 
         // Update port value display
         portValueDisplay.textContent = '$' + portValue.toString(16).toUpperCase().padStart(2, '0');
+        updateBitButtons();
+        updateSignalButtons();
+        vicBankButtons.forEach(button => setActive(button, Number(button.dataset.bank) === state.vicBank));
+        presetButtons.forEach(button => setActive(button, button.classList.contains('active')));
 
         // Clear table body
         memoryTableBody.innerHTML = '';
@@ -486,30 +528,33 @@ document.addEventListener('DOMContentLoaded', async () => {
                     cpuCell.rowSpan = spanInfo.rowspan;
                 }
 
-                const cpuDiv = document.createElement('div');
-                cpuDiv.className = `memory-cell region-${region.type}`;
+                const cpuDiv = createMemoryButton(
+                    `memory-cell region-${region.type}`,
+                    `${region.name}, ${formatRange(region.start, region.end)}`,
+                    `cpu-${region.start}`, region.start, () => showRegionInfo(region)
+                );
                 cpuDiv.dataset.info = region.infoId;
+                cpuDiv.dataset.cpuStart = region.start;
+                cpuDiv.dataset.cpuEnd = region.end;
 
                 if (region.infoId === 'stack') {
                     // Special layout for stack with arrow on right
                     cpuDiv.innerHTML = `
-                            <div>
-                            <div class="region-name">${region.name}</div>
-                            <div class="region-size">${region.size}</div>
-                            <div class="stack-arrow">grows down</div>
-                            </div>
+                            <span>
+                            <span class="region-name">${region.name}</span>
+                            <span class="region-size">${region.size}</span>
+                            <span class="stack-arrow">grows down</span>
+                            </span>
                             `;
                 } else {
                     cpuDiv.innerHTML = `
-                            <div>
-                            <div class="region-name">${region.name}</div>
-                            <div class="region-size">${region.size}</div>
-                            </div>
+                            <span>
+                            <span class="region-name">${region.name}</span>
+                            <span class="region-size">${region.size}</span>
+                            </span>
                             `;
                 }
 
-                cpuDiv.addEventListener('click', () => showRegionInfo(region.infoId));
-                cpuDiv.addEventListener('mouseenter', () => showRegionInfo(region.infoId));
                 cpuCell.appendChild(cpuDiv);
                 row.appendChild(cpuCell);
 
@@ -552,7 +597,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const vicCell = document.createElement('td');
                 vicCell.className = 'vic-cell';
 
-                const vicDiv = document.createElement('div');
+                let vicDiv;
 
                 if (isInVicBank && vicSpanInfo) {
                     // Apply rowspan if greater than 1
@@ -563,16 +608,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const vicResult = vicSpanInfo.vicResult;
                     // Calculate the full range for this merged cell
                     const spanEndRow = gridRows[idx + vicSpanInfo.rowspan - 1];
-                    const spanStart = gridRow.start;
-                    const spanEnd = spanEndRow ? spanEndRow.end : gridRow.end;
-
-                    vicDiv.className = `memory-cell region-${vicResult.type} vic-visible`;
-                    vicDiv.innerHTML = `
-                            <div>
-                            <div class="region-name">${vicResult.label}</div>
-                            ${vicResult.detail ? `<div class="region-size">${vicResult.detail}</div>` : ''}
-                            </div>
-                            `;
+                    const spanStart = spanEndRow ? spanEndRow.start : gridRow.start;
+                    const spanEnd = gridRow.end;
 
                     const vicRegionInfo = {
                         name: vicResult.label,
@@ -580,9 +617,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                         end: spanEnd,
                         type: vicResult.type
                     };
-                    vicDiv.addEventListener('click', () => showVicRegionInfo(vicRegionInfo));
-                    vicDiv.addEventListener('mouseenter', () => showVicRegionInfo(vicRegionInfo));
+                    vicDiv = createMemoryButton(
+                        `memory-cell region-${vicResult.type} vic-visible`,
+                        `VIC-II ${vicResult.label}, ${formatRange(spanStart, spanEnd)}`,
+                        `vic-${spanStart}`, spanStart, () => showVicRegionInfo(vicRegionInfo)
+                    );
+                    vicDiv.innerHTML = `
+                            <span>
+                            <span class="region-name">${vicResult.label}</span>
+                            ${vicResult.detail ? `<span class="region-size">${vicResult.detail}</span>` : ''}
+                            </span>
+                            `;
                 } else if (!isInVicBank) {
+                    vicDiv = document.createElement('div');
                     vicDiv.className = 'memory-cell region-vic-empty';
                     vicDiv.innerHTML = '<span class="vic-inactive">—</span>';
                 }
@@ -597,15 +644,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Populate detail cells with current layout for visibility filtering
         populateDetailsCells(layout);
 
-        // Store layout for next comparison
-        previousLayout = layout;
-
         // Update config summary
         updateConfigSummary(layout);
 
         // Update VIC range display
         if (vicRangeDisplay) {
             vicRangeDisplay.textContent = `$${vicBankStart.toString(16).toUpperCase().padStart(4, '0')}-$${vicBankEnd.toString(16).toUpperCase().padStart(4, '0')}`;
+        }
+
+        if (focusKey) {
+            const buttons = [...memoryTableBody.querySelectorAll('[data-focus-key]')];
+            const replacement = buttons.find(button => button.dataset.focusKey === focusKey)
+                || buttons.find(button => button.dataset.cpuStart !== undefined
+                    && Number(button.dataset.cpuStart) <= focusAddress
+                    && Number(button.dataset.cpuEnd) >= focusAddress);
+            replacement?.focus({ preventScroll: true });
         }
     }
 
@@ -620,7 +673,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const hasBasic = layout.some(r => r.type === 'basic');
         const hasKernal = layout.some(r => r.type === 'kernal');
         const hasIO = layout.some(r => r.type === 'io');
-        const hasCharRom = layout.some(r => r.type === 'charrom');
 
         detailContainers.forEach(container => {
             const start = parseInt(container.dataset.start);
@@ -630,27 +682,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             const entriesInRange = memoryEntries.filter(entry => {
                 const addr = entry.address;
                 if (addr < start || addr > end) return false;
+                if (layout.some(r => r.type === 'unmapped' && r.start <= addr && r.end >= addr)) return false;
 
                 // Filter based on banking - hide entries for banked-out ROMs
                 const region = entry.region;
                 if (region === 'basic' && !hasBasic) return false;
                 if (region === 'kernal' && !hasKernal) return false;
                 // VIC, SID, CIA entries only visible when I/O is visible
-                if ((region === 'vic' || region === 'sid' || region === 'cia1' || region === 'cia2') && !hasIO) return false;
+                if (['vic', 'sid', 'colorram', 'cia1', 'cia2', 'io'].includes(region) && !hasIO) return false;
 
                 return true;
             });
 
             // Create cells for each entry
             entriesInRange.forEach(entry => {
-                const cell = document.createElement('div');
-                cell.className = 'mem-cell';
-                cell.title = `$${entry.hex_addr} - ${entry.name}`;
-                cell.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    showEntryDetails(entry);
-                });
-                cell.addEventListener('mouseenter', () => showEntryDetails(entry));
+                const label = `${entry.hex_addr} - ${entry.name}`;
+                const cell = createMemoryButton(
+                    'mem-cell', label, `entry-${entry.address}-${entry.name}`,
+                    entry.address, () => showEntryDetails(entry)
+                );
+                cell.title = label;
                 container.appendChild(cell);
             });
         });
@@ -671,8 +722,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         let desc = '';
         if (region.type === 'vic-screen') {
             desc = 'This area typically contains video screen memory (40×25 characters = 1000 bytes) and sprite pointers (8 bytes at the end of screen memory). The VIC-II reads character codes from here.';
+        } else if (region.type === 'charrom') {
+            desc = 'In banks 0 and 2, the VIC-II sees the built-in character ROM here instead of RAM, independently of CPU banking. This provides the default character set.';
         } else if (region.type === 'vic-chars') {
-            desc = 'In banks 0 and 2, the VIC-II sees the built-in character ROM here instead of RAM. This provides the default character set. In banks 1 and 3, this is regular RAM for custom character sets.';
+            desc = 'The character-set pointer selects 2KB of RAM in this block. Banks 1 and 3 have no built-in character ROM, so character shapes must be supplied in RAM.';
         } else if (region.type === 'vic-bitmap') {
             desc = 'This 8KB area is commonly used for high-resolution bitmap graphics (8000 bytes) or sprite shape data (64 bytes per sprite × 256 possible sprites). Can also hold custom character sets.';
         } else if (region.type === 'ram') {
@@ -713,35 +766,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    function showRegionInfo(infoId) {
-        // Get region information from info panels
-        const infoPanel = document.getElementById(`info-${infoId}`);
-        if (infoPanel) {
-            const title = infoPanel.querySelector('h3')?.textContent || 'Memory Region';
-            const range = infoPanel.querySelector('.range')?.textContent || '';
-            const desc = infoPanel.querySelector('p')?.textContent || '';
-
-            // Update the main entry details panel with region info
-            document.getElementById('entry-name').textContent = title;
-            document.getElementById('entry-address').textContent = range;
-            document.getElementById('entry-description').textContent = desc;
-            document.getElementById('entry-title').style.display = 'none';
-            document.getElementById('entry-bits-container').style.display = 'none';
-        }
-
-        // Highlight the clicked region
-        document.querySelectorAll('.memory-region').forEach(region => {
-            region.style.outline = 'none';
-        });
-
-        const clickedRegions = document.querySelectorAll(`.memory-region[data-info="${infoId}"]`);
-        clickedRegions.forEach(region => {
-            region.style.outline = '2px solid var(--c64-yellow)';
-        });
+    function showRegionInfo(region) {
+        document.getElementById('entry-name').textContent = region.name;
+        document.getElementById('entry-address').textContent = formatRange(region.start, region.end);
+        document.getElementById('entry-description').textContent = regionDescriptions[region.infoId];
+        document.getElementById('entry-title').style.display = 'none';
+        document.getElementById('entry-bits-container').style.display = 'none';
     }
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
+        if (e.repeat || e.ctrlKey || e.altKey || e.metaKey
+            || e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
         if (e.key === '1') {
             const btn = document.querySelector('[data-bit="loram"]');
             if (btn) btn.click();
@@ -752,7 +788,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             const btn = document.querySelector('[data-bit="charen"]');
             if (btn) btn.click();
         } else if (e.key === 'Escape') {
-            document.querySelectorAll('.memory-region').forEach(r => r.style.outline = 'none');
             resetEntryDetails();
         }
     });
@@ -760,7 +795,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     //
     // Show details for a specific memory entry in the info panel
     //
-    function showEntryDetails(entry, persist = false) {
+    function showEntryDetails(entry) {
         const nameEl = document.getElementById('entry-name');
         const addressEl = document.getElementById('entry-address');
         const titleEl = document.getElementById('entry-title');
@@ -802,7 +837,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             bitsEl.innerHTML = '';
             entry.bits.forEach(bit => {
                 const li = document.createElement('li');
-                const bitLabel = bit.bit_end
+                const bitLabel = bit.bit_end !== null && bit.bit_end !== undefined
                     ? `Bits ${bit.bit}-${bit.bit_end}`
                     : `Bit ${bit.bit}`;
                 // Use textContent to avoid HTML injection from JSON data.
@@ -829,7 +864,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const bitsContainer = document.getElementById('entry-bits-container');
 
         nameEl.textContent = 'Memory Map';
-        addressEl.textContent = 'Hover over cells for details';
+        addressEl.textContent = 'Focus, click or hover over cells for details';
         titleEl.style.display = 'none';
         descEl.textContent = 'The cells on the right of each memory region show documented memory locations from "Mapping the Commodore 64".';
         bitsContainer.style.display = 'none';

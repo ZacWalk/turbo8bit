@@ -187,16 +187,22 @@ export class VICIIRenderer {
         // Built on first use, once the ImageData backing buffer is known
         this.imageDataU32 = null;
         this.spriteCollisionBuffer = null;
+        // Graphics foreground is a pixel-bit property, not an RGB comparison.
+        // Sprites must never change this mask when painting over the graphics.
+        // With MCM set, 00/01 are background and 10/11 are foreground, even
+        // for hires character cells. Sprites themselves treat only 00 as clear.
+        // https://www.cebix.net/VIC-Article.txt, section 3.8.2.
+        this.graphicsForeground = new Uint8Array(width);
     }
 
     //
     // Get the current graphics mode from VIC-II registers
-    // @param {Uint8Array} ram - C64 RAM
+    // @param {Object} memory - { ram: physical RAM, io: latches/color RAM at $D000-relative offsets }
     // @returns {number} Graphics mode constant (MODE_*)
     //
-    getGraphicsMode(ram) {
-        const ctrl1 = ram[VIC_CTRL1];
-        const ctrl2 = ram[VIC_CTRL2];
+    getGraphicsMode(memory) {
+        const ctrl1 = memory.io[0x011];
+        const ctrl2 = memory.io[0x016];
 
         const ecm = ctrl1 & ECM_BIT;  // Extended Color Mode
         const bmm = ctrl1 & BMM_BIT;  // Bitmap Mode
@@ -221,12 +227,12 @@ export class VICIIRenderer {
 
     //
     // Get scroll values from VIC-II registers
-    // @param {Uint8Array} ram - C64 RAM
+    // @param {Object} memory - Physical RAM and I/O views, independent of CPU banking
     // @returns {Object} { xscroll, yscroll }
     //
-    getScrollValues(ram) {
-        const ctrl1 = ram[VIC_CTRL1];
-        const ctrl2 = ram[VIC_CTRL2];
+    getScrollValues(memory) {
+        const ctrl1 = memory.io[0x011];
+        const ctrl2 = memory.io[0x016];
 
         // XSCROLL: bits 0-2 of $D016 (0-7 pixels horizontal scroll)
         // YSCROLL: bits 0-2 of $D011 (0-7 pixels vertical scroll)
@@ -251,16 +257,17 @@ export class VICIIRenderer {
     //   Bank 2: $9000-$9FFF and $9800-$9FFF
     //   (Not visible in banks 1 and 3)
     //
-    // @param {Uint8Array} ram - C64 RAM
+    // @param {Object} memory - Physical RAM and I/O views, independent of CPU banking
     // @returns {Object} { vicBank, screenAddr, charAddr, bitmapAddr, useCharROM }
     //
-    getMemoryAddresses(ram) {
+    getMemoryAddresses(memory) {
+        const io = memory.io;
         // Get VIC bank from CIA2 $DD00 (bits 0-1, inverted)
-        const cia2PortA = ram[0xDD00];
+        const cia2PortA = io[0xD00] | ~io[0xD02];
         const vicBankNum = (~cia2PortA) & 0x03;  // Invert bits 0-1
         const vicBank = vicBankNum * 0x4000;     // Bank base address: 0, $4000, $8000, $C000
 
-        const memCtrl = ram[VIC_MEMORY];
+        const memCtrl = io[0x018];
 
         // Screen memory: bits 4-7 of $D018 * 0x0400 + VIC bank
         const screenAddr = vicBank + ((memCtrl >> 4) & 0x0F) * 0x0400;
@@ -289,12 +296,12 @@ export class VICIIRenderer {
     // 2. Raster line is within the text display area ($30-$F7)
     // 3. Lower 3 bits of raster line match YSCROLL
     //
-    // @param {Uint8Array} ram - C64 RAM
+    // @param {Object} memory - Physical RAM and I/O views, independent of CPU banking
     // @param {number} rasterLine - Current raster line
     // @returns {boolean} True if Bad Line
     //
-    checkBadLine(ram, rasterLine) {
-        const ctrl1 = ram[VIC_CTRL1];
+    checkBadLine(memory, rasterLine) {
+        const ctrl1 = memory.io[0x011];
 
         // 1. Display enabled (Bit 4)
         if (!(ctrl1 & 0x10)) return false;
@@ -313,10 +320,10 @@ export class VICIIRenderer {
     // Called during CPU execution for accurate per-scanline graphics
     //
     // @param {Uint32Array} frameBuffer - Frame buffer (width * height pixels, RGBA packed)
-    // @param {Uint8Array} ram - C64 RAM (64KB)
+    // @param {Object} memory - { ram: Uint8Array(65536), io: Uint8Array(4096) }
     // @param {number} rasterLine - VIC-II raster line number (0-311)
     //
-    renderScanline(frameBuffer, ram, rasterLine) {
+    renderScanline(frameBuffer, memory, rasterLine) {
         // Convert VIC-II raster line to canvas Y coordinate
         const canvasY = rasterLine - FIRST_VISIBLE_RASTER;
 
@@ -324,10 +331,12 @@ export class VICIIRenderer {
         if (canvasY < 0 || canvasY >= this.height) return;
 
         const w = this.width;
+        const io = memory.io;
+        this.graphicsForeground.fill(0);
 
         // Get colors for this scanline
-        const borderColor = PALETTE[ram[0xD020] & 0x0F];
-        const bgColor = PALETTE[ram[0xD021] & 0x0F];
+        const borderColor = PALETTE[io[0x020] & 0x0F];
+        const bgColor = PALETTE[io[0x021] & 0x0F];
 
         // Determine if this scanline is in the main display area (Y)
         const inScreenY = canvasY >= this.borderY && canvasY < (this.borderY + this.screenHeight);
@@ -345,12 +354,12 @@ export class VICIIRenderer {
         frameBuffer.fill(bgColor, screenStart, screenEnd);
         frameBuffer.fill(borderColor, screenEnd, rowOffset + w);
 
-        this.renderDisplayWindow(frameBuffer, ram, canvasY, rasterLine);
+        this.renderDisplayWindow(frameBuffer, memory, canvasY, rasterLine);
 
         // CSEL (bit 3 of $D016) narrows the display window to 38 columns: the
         // border unit covers 7 pixels on the left and 9 on the right. It paints
         // over the graphics and sprites, so it has to run last.
-        if ((ram[VIC_CTRL2] & 0x08) === 0) {
+        if ((io[0x016] & 0x08) === 0) {
             frameBuffer.fill(borderColor, screenStart, screenStart + 7);
             frameBuffer.fill(borderColor, screenEnd - 9, screenEnd);
         }
@@ -360,15 +369,15 @@ export class VICIIRenderer {
     // Render the graphics and sprites inside the display window for one scanline
     // @private
     //
-    renderDisplayWindow(frameBuffer, ram, canvasY, rasterLine) {
+    renderDisplayWindow(frameBuffer, memory, canvasY, rasterLine) {
         // Get graphics mode
-        const mode = this.getGraphicsMode(ram);
+        const mode = this.getGraphicsMode(memory);
         if (mode === MODE_INVALID) return; // Black screen for invalid modes (already bg)
 
         // Get memory addresses and scroll values once for this scanline
-        const memAddrs = this.getMemoryAddresses(ram);
-        const { xscroll, yscroll } = this.getScrollValues(ram);
-        const rsel = (ram[VIC_CTRL1] & 0x08) !== 0;
+        const memAddrs = this.getMemoryAddresses(memory);
+        const { xscroll, yscroll } = this.getScrollValues(memory);
+        const rsel = (memory.io[0x011] & 0x08) !== 0;
 
         // Calculate which character row this scanline belongs to
         // Screen area starts at canvasY = borderY
@@ -391,24 +400,24 @@ export class VICIIRenderer {
         // Render the appropriate graphics mode for this scanline
         switch (mode) {
             case MODE_STANDARD_CHARACTER:
-                this.renderScanlineStandardCharacter(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, xscroll);
+                this.renderScanlineStandardCharacter(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, xscroll);
                 break;
             case MODE_MULTICOLOR_CHARACTER:
-                this.renderScanlineMulticolorCharacter(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, xscroll);
+                this.renderScanlineMulticolorCharacter(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, xscroll);
                 break;
             case MODE_STANDARD_BITMAP:
-                this.renderScanlineStandardBitmap(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, xscroll);
+                this.renderScanlineStandardBitmap(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, xscroll);
                 break;
             case MODE_MULTICOLOR_BITMAP:
-                this.renderScanlineMulticolorBitmap(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, xscroll);
+                this.renderScanlineMulticolorBitmap(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, xscroll);
                 break;
             case MODE_EXTENDED_BACKGROUND:
-                this.renderScanlineExtendedBackground(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, xscroll);
+                this.renderScanlineExtendedBackground(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, xscroll);
                 break;
         }
 
         // Render sprites for this scanline
-        this.renderSpriteScanline(frameBuffer, ram, canvasY, rasterLine, memAddrs);
+        this.renderSpriteScanline(frameBuffer, memory, canvasY, rasterLine, memAddrs);
     }
 
     //
@@ -454,7 +463,8 @@ export class VICIIRenderer {
     // Render one scanline of standard character mode to frame buffer
     // @private
     //
-    renderScanlineStandardCharacter(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+    renderScanlineStandardCharacter(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+        const { ram, io } = memory;
         const { screenAddr, charAddr, useCharROM } = memAddrs;
         const w = this.width;
         const rowOffset = canvasY * w;
@@ -463,11 +473,11 @@ export class VICIIRenderer {
         for (let c = 0; c < 40; c++) {
             const cell = screenAddr + charRow * 40 + c;
             const charCode = ram[cell];
-            const color = PALETTE[ram[COLOR_RAM + charRow * 40 + c] & 0x0F];
+            const color = PALETTE[io[0x800 + charRow * 40 + c] & 0x0F];
             const glyphAddr = charCode * 8;
 
             const line = useCharROM
-                ? (chars[glyphAddr + charPixelY] || 0)
+                ? chars[(charAddr & 0x0800) + glyphAddr + charPixelY]
                 : ram[charAddr + glyphAddr + charPixelY];
 
             for (let cx = 0; cx < 8; cx++) {
@@ -475,6 +485,7 @@ export class VICIIRenderer {
                     const px = this.borderX + c * 8 + cx + scrollX;
                     if (px >= 0 && px < w) {
                         frameBuffer[rowOffset + px] = color;
+                        this.graphicsForeground[px] = 1;
                     }
                 }
             }
@@ -485,26 +496,27 @@ export class VICIIRenderer {
     // Render one scanline of multicolor character mode to frame buffer
     // @private
     //
-    renderScanlineMulticolorCharacter(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+    renderScanlineMulticolorCharacter(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+        const { ram, io } = memory;
         const { screenAddr, charAddr, useCharROM } = memAddrs;
         const w = this.width;
         const rowOffset = canvasY * w;
 
-        const bgColor0 = PALETTE[ram[VIC_BGCOLOR0] & 0x0F];
-        const bgColor1 = PALETTE[ram[VIC_BGCOLOR1] & 0x0F];
-        const bgColor2 = PALETTE[ram[VIC_BGCOLOR2] & 0x0F];
+        const bgColor0 = PALETTE[io[0x021] & 0x0F];
+        const bgColor1 = PALETTE[io[0x022] & 0x0F];
+        const bgColor2 = PALETTE[io[0x023] & 0x0F];
         const chars = useCharROM ? rom_chars : null;
 
         for (let c = 0; c < 40; c++) {
             const cell = screenAddr + charRow * 40 + c;
             const charCode = ram[cell];
-            const colorRAM = ram[COLOR_RAM + charRow * 40 + c];
+            const colorRAM = io[0x800 + charRow * 40 + c];
             const isMulticolor = (colorRAM & 0x08) !== 0;
             const fgColor = colorRAM & 0x07;
             const glyphAddr = charCode * 8;
 
             const line = useCharROM
-                ? (chars[glyphAddr + charPixelY] || 0)
+                ? chars[(charAddr & 0x0800) + glyphAddr + charPixelY]
                 : ram[charAddr + glyphAddr + charPixelY];
 
             if (isMulticolor) {
@@ -521,16 +533,20 @@ export class VICIIRenderer {
                     if (px >= 0 && px + 1 < w) {
                         frameBuffer[rowOffset + px] = color;
                         frameBuffer[rowOffset + px + 1] = color;
+                        this.graphicsForeground[px] = bitPair >> 1;
+                        this.graphicsForeground[px + 1] = bitPair >> 1;
                     }
                 }
             } else {
                 const color = PALETTE[colorRAM & 0x0F];
                 for (let cx = 0; cx < 8; cx++) {
-                    if (line & (0x80 >> cx)) {
-                        const px = this.borderX + c * 8 + cx + scrollX;
-                        if (px >= 0 && px < w) {
+                    const px = this.borderX + c * 8 + cx + scrollX;
+                    if (px >= 0 && px < w) {
+                        if (line & (0x80 >> cx)) {
                             frameBuffer[rowOffset + px] = color;
                         }
+                        // The cell renders hires, but MCM still pairs priority bits.
+                        this.graphicsForeground[px] = (line >> (7 - (cx & ~1))) & 1;
                     }
                 }
             }
@@ -541,7 +557,8 @@ export class VICIIRenderer {
     // Render one scanline of standard bitmap mode to frame buffer
     // @private
     //
-    renderScanlineStandardBitmap(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+    renderScanlineStandardBitmap(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+        const ram = memory.ram;
         const { screenAddr, bitmapAddr } = memAddrs;
         const w = this.width;
         const rowOffset = canvasY * w;
@@ -560,6 +577,7 @@ export class VICIIRenderer {
                 const px = this.borderX + charCol * 8 + cx + scrollX;
                 if (px >= 0 && px < w) {
                     frameBuffer[rowOffset + px] = color;
+                    this.graphicsForeground[px] = bit;
                 }
             }
         }
@@ -569,15 +587,16 @@ export class VICIIRenderer {
     // Render one scanline of multicolor bitmap mode to frame buffer
     // @private
     //
-    renderScanlineMulticolorBitmap(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+    renderScanlineMulticolorBitmap(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+        const { ram, io } = memory;
         const { screenAddr, bitmapAddr } = memAddrs;
         const w = this.width;
         const rowOffset = canvasY * w;
-        const bgColor0 = PALETTE[ram[VIC_BGCOLOR0] & 0x0F];
+        const bgColor0 = PALETTE[io[0x021] & 0x0F];
 
         for (let charCol = 0; charCol < 40; charCol++) {
             const screenByte = ram[screenAddr + charRow * 40 + charCol];
-            const colorRAMByte = ram[COLOR_RAM + charRow * 40 + charCol];
+            const colorRAMByte = io[0x800 + charRow * 40 + charCol];
 
             const color1 = PALETTE[(screenByte >> 4) & 0x0F];
             const color2 = PALETTE[screenByte & 0x0F];
@@ -599,6 +618,8 @@ export class VICIIRenderer {
                 if (px >= 0 && px + 1 < w) {
                     frameBuffer[rowOffset + px] = color;
                     frameBuffer[rowOffset + px + 1] = color;
+                    this.graphicsForeground[px] = bitPair >> 1;
+                    this.graphicsForeground[px + 1] = bitPair >> 1;
                 }
             }
         }
@@ -608,17 +629,18 @@ export class VICIIRenderer {
     // Render one scanline of extended background color mode to frame buffer
     // @private
     //
-    renderScanlineExtendedBackground(frameBuffer, ram, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+    renderScanlineExtendedBackground(frameBuffer, memory, canvasY, charRow, charPixelY, memAddrs, scrollX) {
+        const { ram, io } = memory;
         const { screenAddr, charAddr, useCharROM } = memAddrs;
         const w = this.width;
         const rowOffset = canvasY * w;
         const chars = useCharROM ? rom_chars : null;
 
         const bgColors = [
-            PALETTE[ram[VIC_BGCOLOR0] & 0x0F],
-            PALETTE[ram[VIC_BGCOLOR1] & 0x0F],
-            PALETTE[ram[VIC_BGCOLOR2] & 0x0F],
-            PALETTE[ram[VIC_BGCOLOR3] & 0x0F]
+            PALETTE[io[0x021] & 0x0F],
+            PALETTE[io[0x022] & 0x0F],
+            PALETTE[io[0x023] & 0x0F],
+            PALETTE[io[0x024] & 0x0F]
         ];
 
         for (let c = 0; c < 40; c++) {
@@ -627,11 +649,11 @@ export class VICIIRenderer {
             const actualCharCode = charCode & 0x3F;
             const bgSelect = (charCode >> 6) & 0x03;
             const bgColor = bgColors[bgSelect];
-            const fgColor = PALETTE[ram[COLOR_RAM + charRow * 40 + c] & 0x0F];
+            const fgColor = PALETTE[io[0x800 + charRow * 40 + c] & 0x0F];
             const glyphAddr = actualCharCode * 8;
 
             const line = useCharROM
-                ? (chars[glyphAddr + charPixelY] || 0)
+                ? chars[(charAddr & 0x0800) + glyphAddr + charPixelY]
                 : ram[charAddr + glyphAddr + charPixelY];
 
             for (let cx = 0; cx < 8; cx++) {
@@ -639,8 +661,10 @@ export class VICIIRenderer {
                 if (px >= 0 && px < w) {
                     if (line & (0x80 >> cx)) {
                         frameBuffer[rowOffset + px] = fgColor;
+                        this.graphicsForeground[px] = 1;
                     } else {
                         frameBuffer[rowOffset + px] = bgColor;
+                        this.graphicsForeground[px] = 0;
                     }
                 }
             }
@@ -651,8 +675,9 @@ export class VICIIRenderer {
     // Render sprites for a single scanline to frame buffer
     // @private
     //
-    renderSpriteScanline(frameBuffer, ram, canvasY, rasterLine, memAddrs) {
-        const spriteEnable = ram[SPRITE_ENABLE];
+    renderSpriteScanline(frameBuffer, memory, canvasY, rasterLine, memAddrs) {
+        const { ram, io } = memory;
+        const spriteEnable = io[0x015];
         if (spriteEnable === 0) return;
 
         // Initialize collision buffer if needed
@@ -661,17 +686,16 @@ export class VICIIRenderer {
         }
         this.spriteCollisionBuffer.fill(-1);
 
-        const spriteXExpand = ram[SPRITE_X_EXPAND];
-        const spriteYExpand = ram[SPRITE_Y_EXPAND];
-        const spriteMulticolor = ram[SPRITE_MULTICOLOR];
-        const spritePriority = ram[SPRITE_PRIORITY];
+        const spriteXExpand = io[0x01D];
+        const spriteYExpand = io[0x017];
+        const spriteMulticolor = io[0x01C];
+        const spritePriority = io[0x01B];
 
-        const spriteMulticolor0 = PALETTE[ram[0xD025] & 0x0F];
-        const spriteMulticolor1 = PALETTE[ram[0xD026] & 0x0F];
+        const spriteMulticolor0 = PALETTE[io[0x025] & 0x0F];
+        const spriteMulticolor1 = PALETTE[io[0x026] & 0x0F];
 
         const { vicBank, screenAddr } = memAddrs;
         const spritePtrBase = screenAddr + 0x03F8;
-        const bgPalette = PALETTE[ram[0xD021] & 0x0F];
         const w = this.width;
         const rowOffset = canvasY * w;
         const collision = this.spriteCollisionBuffer;
@@ -680,8 +704,8 @@ export class VICIIRenderer {
         for (let sprite = 7; sprite >= 0; sprite--) {
             if (!(spriteEnable & (1 << sprite))) continue;
 
-            const vicX = ram[0xD000 + sprite * 2] | ((ram[0xD010] & (1 << sprite)) ? 0x100 : 0);
-            const vicY = ram[0xD001 + sprite * 2];
+            const vicX = io[sprite * 2] | ((io[0x010] & (1 << sprite)) ? 0x100 : 0);
+            const vicY = io[0x001 + sprite * 2];
 
             // Convert VIC-II coordinates to canvas coordinates
             const spriteX = vicX - SPRITE_X_OFFSET + this.borderX;
@@ -698,7 +722,7 @@ export class VICIIRenderer {
 
             const spritePtr = ram[spritePtrBase + sprite];
             const spriteDataAddr = vicBank + spritePtr * 64;
-            const spriteColor = PALETTE[ram[0xD027 + sprite] & 0x0F];
+            const spriteColor = PALETTE[io[0x027 + sprite] & 0x0F];
 
             const isMulticolor = spriteMulticolor & (1 << sprite);
             // X expansion doubles the width of every pixel, so both the pixel
@@ -734,13 +758,12 @@ export class VICIIRenderer {
 
                             const otherSprite = collision[px];
                             if (otherSprite !== -1) {
-                                ram[0xD01E] |= spriteBit | (1 << otherSprite);
+                                io[0x01E] |= spriteBit | (1 << otherSprite);
                             }
                             collision[px] = sprite;
 
-                            const existingColor = frameBuffer[rowOffset + px];
-                            if (existingColor !== bgPalette) {
-                                ram[0xD01F] |= spriteBit;
+                            if (this.graphicsForeground[px]) {
+                                io[0x01F] |= spriteBit;
                                 // Behind-background sprites only show on background pixels
                                 if (isBehindBackground) continue;
                             }
@@ -760,13 +783,12 @@ export class VICIIRenderer {
 
                             const otherSprite = collision[px];
                             if (otherSprite !== -1) {
-                                ram[0xD01E] |= spriteBit | (1 << otherSprite);
+                                io[0x01E] |= spriteBit | (1 << otherSprite);
                             }
                             collision[px] = sprite;
 
-                            const existingColor = frameBuffer[rowOffset + px];
-                            if (existingColor !== bgPalette) {
-                                ram[0xD01F] |= spriteBit;
+                            if (this.graphicsForeground[px]) {
+                                io[0x01F] |= spriteBit;
                                 if (isBehindBackground) continue;
                             }
                             frameBuffer[rowOffset + px] = spriteColor;
@@ -777,4 +799,3 @@ export class VICIIRenderer {
         }
     }
 }
-

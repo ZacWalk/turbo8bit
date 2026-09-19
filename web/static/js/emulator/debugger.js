@@ -40,6 +40,15 @@ export const DebuggerState = {
     HALTED: 'halted'
 };
 
+// Capture entrySP after the caller's return address is pushed, before entering
+// the program. An IRQ may replace the instruction at PC, so require both the
+// RTS opcode (peeked before execution) and its actual two-byte stack pop.
+// Callers that require a specific return PC must check that separately.
+export function isTopLevelRTS(opcode, spBefore, spAfter, entrySP) {
+    return opcode === 0x60 && spBefore === entrySP &&
+        spAfter === ((entrySP + 2) & 0xFF);
+}
+
 //
 // C64Debugger - Debug wrapper for C64Machine
 //
@@ -76,6 +85,7 @@ export class C64Debugger {
         this.codeStart = 0;
         this.codeEnd = 0;
         this.codeBytes = null;
+        this.entryStackPointer = null;
 
         // Running animation
         this.runIntervalId = null;
@@ -91,6 +101,8 @@ export class C64Debugger {
         this.codeStart = startAddress;
         this.codeEnd = startAddress + bytes.length;
         this.codeBytes = bytes;
+        // The caller supplies the return frame; nested calls use lower stack positions.
+        this.entryStackPointer = this.cpu.SP;
 
         // Load into RAM
         for (let i = 0; i < bytes.length; i++) {
@@ -116,6 +128,7 @@ export class C64Debugger {
         this.cpu.X = 0;
         this.cpu.Y = 0;
         this.cpu.SP = 0xFF;
+        this.entryStackPointer = this.codeBytes ? this.cpu.SP : null;
         this.cpu.P = 0x24;  // Interrupt disable set
         this.cpu.halted = false;
 
@@ -172,13 +185,9 @@ export class C64Debugger {
             this.state = DebuggerState.HALTED;
         }
 
-        // Check for return to BASIC (RTS from our code)
-        if (this.cpu.PC < this.codeStart || this.cpu.PC >= this.codeEnd) {
-            // We've returned from our code
-            if (instruction.mnemonic === 'RTS' || instruction.mnemonic === 'JMP') {
-                this.state = DebuggerState.STOPPED;
-                this.stopRunning();
-            }
+        if (isTopLevelRTS(instruction.bytes[0], prevState.SP, this.cpu.SP, this.entryStackPointer)) {
+            this.state = DebuggerState.STOPPED;
+            this.stopRunning();
         }
 
         // Notify listeners
@@ -237,7 +246,7 @@ export class C64Debugger {
 
                 this.step();
 
-                // Check if we stopped (RTS, JMP out, or halted)
+                // Check if we returned to the caller or halted
                 if (this.state !== DebuggerState.RUNNING) {
                     this.stopRunning();
                     return;

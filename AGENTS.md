@@ -26,15 +26,16 @@ Fonts. Keep it that way.
 
 ```powershell
 .\dd.ps1 run             # dev server on http://localhost:8082
-.\dd.ps1 test            # pytest; baseline is 82 passed, 25 skipped, 0 failed
+.\dd.ps1 test            # pytest; baseline is 476 passed, 25 skipped, 0 failed
 .\dd.ps1 format          # Black (-Check to report without rewriting)
 .\dd.ps1 deploy          # App Engine (project is hard-pinned inside dd.ps1)
 .\dd.ps1 gen             # regenerate favicons + OG image
 .\dd.ps1 crt             # publish CRT cartridges to Cloud Storage
 ```
 
-The 25 skips are cartridge tests whose CRT dumps are not in the repo. If the
-collected count changes from 107, something was lost — investigate.
+The 25 skips are cartridge tests whose CRT dumps are not in the repo. The suite
+collects 501 cases: the original 107 plus 394 review regressions. Investigate
+unexpected drops in collection, and update this baseline when adding tests.
 
 ## Layout
 
@@ -53,7 +54,7 @@ web/
       examples.js             # sample picker shared by / and /asm
       hardware.js chip3d.js   # bus simulation canvas + Three.js DIP renderer
       memmap.js               # memory map explorer
-      memmap-data.json        # 580KB of annotations; only /memmap loads it
+      memmap-data.json        # generated annotations; only /memmap loads it
       emulator/               # the C64 emulator (see README for the module table)
 tools/                        # gen_favicons.py, parse_memmap.py
 tests/                        # pytest + py_mini_racer, helpers in tests/js/
@@ -78,14 +79,23 @@ without them, and is what disassembly, hex dumps and step-over detection must
 use — otherwise inspecting memory silently eats the running program's pending
 interrupts.
 
+**RAM is not a register mirror.** `machine.ram` holds physical RAM, including
+the RAM underneath I/O. VIC/CIA registers and color RAM live separately.
+Use `peek()` for a banking-aware CPU view, `peekIO()` for explicit chip-state
+inspection, and `writeIO()` only for host-side hardware setup independent of
+CPU banking. Emulated CPU stores still go through `write()`.
+
 **Audio flows one way.** `machine.runFrame(buf)` is the only correct audio path:
 it interleaves `sid.clock()` with CPU execution once per scanline so
 cycle-timestamped SID writes land in the right place, and reports the sample
-count in `machine.audioSamplesGenerated`. `C64Emulator` then moves those samples
-into a ring buffer that the Web Audio callback drains. Never generate audio
-directly from the audio callback — the callback rate and the frame rate do not
-match, and you get gaps. `machine.generateAudio()` clocks a whole frame in one
-call and exists only for tests.
+count in `machine.audioSamplesGenerated`. `C64Emulator` moves those samples into
+a ring buffer that Web Audio drains. `SIDPlayer` services audio requests from
+complete frames using a sample FIFO, retaining the unused tail for the next
+request. Initialization and visualization also clock complete buffered frames,
+discarding their output when appropriate. Never clock SID again after
+`runFrame(buf)`. `machine.generateAudio()` exists only for isolated tests.
+Worklet delivery is request-driven even at startup; an unsolicited priming
+block breaks pending-request accounting and can evict valid queued samples.
 
 **A muted machine still needs its SID drained.** When `audioEnabled` is false
 nothing clocks the SID, so `runFrame` calls `sid.applyPendingWrites()`. Without
@@ -113,10 +123,40 @@ up both land inside one frame is invisible to it, so `C64Emulator` defers such
 releases until a frame has run. Anything else that pokes the matrix needs the
 same treatment.
 
+**Key identity is physical; character mapping is logical.** Use `event.code`
+to pair keydown/keyup, with `event.key` only as a fallback. Releasing Shift can
+change `event.key` before the character key is released. Native page controls
+must keep their keyboard events; only keys actually captured by the emulator
+should have their releases consumed.
+
+**Wait for cold boot before loading lab programs.** `whenBasicReady()` observes
+the empty BASIC pointers and `READY.` screen codes after completed frames.
+It is a latched fresh-boot signal, not a detector for arbitrary program
+completion. Resets/cartridge changes invalidate pending requests. Assembly
+Stop uses `resetToBasic()` because arbitrary code can halt the CPU or replace
+banking and interrupt state; a normal RTS must not take that reset path.
+Numbered BASIC editor loads also reset first. A wall-clock delay after
+`pressStop()` is not a reliable way to stop code: it depends on later emulated
+frames and functioning KERNAL interrupts. The screen RUN command and direct
+typing deliberately retain machine state.
+Page controllers clear stale debug metadata through `C64Emulator.onReset`, so
+cartridge resets and explicit reset buttons follow the same cleanup path.
+
+**A stack change is not a subroutine return.** Both debugger controllers use
+`isTopLevelRTS()` to check the fetched opcode, entry stack depth and actual
+two-byte pop. TXS or an interrupt that preempts an RTS must not end stepping.
+The Assembly page additionally checks its known BASIC return address.
+
 **The VIC-II renders per scanline, not per frame.** `runFrame` renders the
 *previous* line on each line transition, which gives a raster IRQ handler its
 full ~63 cycles to change registers first. Batch-rendering a whole frame would
 break every split-screen effect.
+
+**A Bad Line stalls the CPU, not machine time.** CIA timers and the raster clock
+still advance during stolen cycles. Instruction overshoot carries into the next
+frame budget instead of being discarded.
+Raster timing follows the selected clock standard: PAL is 63 cycles x 312
+lines, NTSC is 65 x 263. Frame budgets and raster-register reads must agree.
 
 **Sprite collision registers `$D01E`/`$D01F` clear on read.** They are latches;
 the renderer accumulates into them and `readVIC` resets them.

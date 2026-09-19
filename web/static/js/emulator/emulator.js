@@ -27,9 +27,7 @@
 
 import { C64Machine } from './machine.js';
 import { ChipModel, SamplingMethod } from './sid.js';
-import {
-    VICIIRenderer,
-} from './vic-ii.js';
+import { VICIIRenderer } from './vic-ii.js';
 
 // Ring buffer between the emulation loop and the Web Audio callback. Both run
 // on the main thread, but at unrelated rates (50Hz frames vs 2048-sample
@@ -48,6 +46,8 @@ const AUDIO_FRAME_SAMPLES = 2048;
 // Excess builds up during start-up, before the first callback fires, and is
 // trimmed once.
 const AUDIO_MAX_LEAD = 4096;
+const BASIC_BOOT_FRAME_LIMIT = 1000;
+const BASIC_READY_CODES = [18, 5, 1, 4, 25, 46];
 
 // ============================================================================
 // KEYBOARD MATRIX MAPPING
@@ -173,6 +173,15 @@ export class C64Emulator {
         this.paused = false;  // For debug stepping mode
         this.lastTime = 0;
         this.timeAccumulator = 0;
+        this.animationId = null;
+        this.runGeneration = 0;
+        this.audioGeneration = 0;
+        this.bootGeneration = 0;
+        this.basicReady = false;
+        this.bootFrames = 0;
+        this.bootError = null;
+        this.bootWaiters = [];
+        this.onReset = options.onReset || null;
 
         // Joystick emulation state
         // When activeJoystick is 1 or 2, arrow keys control that joystick
@@ -182,11 +191,16 @@ export class C64Emulator {
 
         // True while the user is physically holding a PC Shift key.
         this.physicalShift = false;
+        this.heldShiftKeys = new Set();
+        this.heldJoystickKeys = new Map();
+        this.pendingJoystickReleases = [];
 
         // Keys currently down, mapped to their matrix position and the frame
         // they went down on, plus releases deferred until that frame has run.
         this.heldKeys = new Map();
         this.pendingReleases = [];
+        this.typingQueue = [];
+        this.typingTimer = null;
 
         // VIC-II renderer
         this.vicRenderer = new VICIIRenderer(this.canvas.width, this.canvas.height);
@@ -197,17 +211,72 @@ export class C64Emulator {
 
         // The emulation loop is the audio producer and the Web Audio callback is
         // the consumer, so samples pass between them through a ring buffer. One
-        // PAL frame is ~882 samples at 44.1kHz; 8192 gives ~9 frames of slack.        this.audioRing = new Float32Array(AUDIO_RING_SIZE);
+        // PAL frame is ~882 samples at 44.1kHz; 8192 gives ~9 frames of slack.
+        this.audioRing = new Float32Array(AUDIO_RING_SIZE);
         this.ringWrite = 0;
         this.ringRead = 0;
         this.frameSamples = new Int16Array(AUDIO_FRAME_SAMPLES);
         this.lastSample = 0;
     }
 
-    reset() {
-        // Eject any loaded cartridge on reset
-        this.machine.ejectCartridge();
+    reset({ keepCartridge = false } = {}) {
+        this.cancelTyping();
+        this.releaseAllKeys();
+        this.beginBasicBoot(keepCartridge
+            ? new Error('Reset the C64 before loading a BASIC program with a cartridge mounted.')
+            : null);
+        if (!keepCartridge) this.machine.ejectCartridge();
         this.machine.reset();
+        this.ringWrite = 0;
+        this.ringRead = 0;
+        this.lastSample = 0;
+        this.timeAccumulator = 0;
+        this.lastTime = performance.now();
+        this.resume();
+        this.onReset?.();
+    }
+
+    resetToBasic() {
+        this.reset();
+        if (!this.running) this.start();
+        return this.whenBasicReady();
+    }
+
+    beginBasicBoot(error = null) {
+        for (const waiter of this.bootWaiters.splice(0)) {
+            waiter.reject(new Error('BASIC startup was interrupted by a reset or cartridge change.'));
+        }
+        this.bootGeneration++;
+        this.basicReady = false;
+        this.bootFrames = 0;
+        this.bootError = error;
+    }
+
+    whenBasicReady() {
+        if (this.basicReady) return Promise.resolve();
+        if (this.bootError) return Promise.reject(this.bootError);
+        return new Promise((resolve, reject) => this.bootWaiters.push({ resolve, reject }));
+    }
+
+    checkBasicReady() {
+        if (this.basicReady || this.bootError) return;
+        if (++this.bootFrames > BASIC_BOOT_FRAME_LIMIT) {
+            this.bootError = new Error('The C64 did not reach BASIC READY. Reset and try again.');
+            for (const waiter of this.bootWaiters.splice(0)) waiter.reject(this.bootError);
+            return;
+        }
+
+        // Only recognize the empty READY prompt of a fresh boot, never use
+        // screen text to decide whether an arbitrary running program has ended.
+        const peek = address => this.machine.peek(address);
+        if (peek(0x2b) !== 1 || peek(0x2c) !== 8
+            || peek(0x2d) !== 3 || peek(0x2e) !== 8) return;
+        for (let address = 0x400; address <= 0x7e8 - BASIC_READY_CODES.length; address++) {
+            if (!BASIC_READY_CODES.every((code, offset) => peek(address + offset) === code)) continue;
+            this.basicReady = true;
+            for (const waiter of this.bootWaiters.splice(0)) waiter.resolve();
+            return;
+        }
     }
 
     //
@@ -217,11 +286,13 @@ export class C64Emulator {
         if (this.running) return;
 
         this.running = true;
+        const generation = ++this.runGeneration;
 
         // Initialize audio if enabled
         if (this.audioEnabled) {
             await this.initAudio();
         }
+        if (!this.running || generation !== this.runGeneration) return;
 
         this.lastTime = performance.now();
         this.timeAccumulator = 0;
@@ -232,6 +303,7 @@ export class C64Emulator {
     // Initialize Web Audio API for sound output
     //
     async initAudio() {
+        const generation = ++this.audioGeneration;
         try {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: this.sampleRate
@@ -273,13 +345,17 @@ export class C64Emulator {
             // explicitly resumed; enableAudio() is invoked from a user gesture
             // so this is allowed.
             if (this.audioContext.state === 'suspended') {
-                try { await this.audioContext.resume(); } catch (e) { /* ignore */ }
+                await this.audioContext.resume();
             }
+            return generation === this.audioGeneration;
         } catch (e) {
+            if (generation !== this.audioGeneration) return false;
             console.warn('Failed to initialize audio:', e);
             this.audioEnabled = false;
             // Otherwise runFrame keeps queueing SID writes nothing will retire.
             this.machine.audioEnabled = false;
+            this.teardownAudio();
+            return false;
         }
     }
 
@@ -335,6 +411,16 @@ export class C64Emulator {
 
     stop() {
         this.running = false;
+        this.runGeneration++;
+        if (this.animationId !== null) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        this.cancelTyping();
+        this.releaseAllKeys();
+        for (const waiter of this.bootWaiters.splice(0)) {
+            waiter.reject(new Error('Emulation stopped before BASIC was ready.'));
+        }
         this.teardownAudio();
     }
 
@@ -343,13 +429,18 @@ export class C64Emulator {
     // @private
     //
     teardownAudio() {
+        this.audioGeneration++;
         if (this.audioProcessor) {
             this.audioProcessor.onaudioprocess = null;
             this.audioProcessor.disconnect();
             this.audioProcessor = null;
         }
         if (this.audioContext) {
-            this.audioContext.close();
+            if (this.audioContext.state !== 'closed') {
+                this.audioContext.close().catch(error => {
+                    console.warn('Failed to close audio:', error);
+                });
+            }
             this.audioContext = null;
         }
         this.ringWrite = 0;
@@ -384,11 +475,11 @@ export class C64Emulator {
     // Called when user unmutes - audio will start when SID is written to
     //
     async enableAudio() {
-        if (this.audioEnabled) return; // Already enabled
+        if (this.audioEnabled) return this.audioProcessor !== null;
 
         this.audioEnabled = true;
         this.machine.audioEnabled = true;
-        await this.initAudio();
+        return this.initAudio();
     }
 
     //
@@ -402,7 +493,32 @@ export class C64Emulator {
         this.teardownAudio();
     }
 
+    bindMuteButton(button, statusElement) {
+        this.statusElement = statusElement;
+        const update = () => {
+            button.textContent = this.audioEnabled ? '\u{1f50a} SOUND' : '\u{1f507} MUTED';
+            button.classList.toggle('muted', !this.audioEnabled);
+            button.setAttribute('aria-pressed', String(this.audioEnabled));
+        };
+        update();
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            statusElement.textContent = '';
+            try {
+                if (this.audioEnabled) {
+                    this.disableAudio();
+                } else if (!await this.enableAudio()) {
+                    statusElement.textContent = 'Sound could not start. Check your audio device and try again.';
+                }
+            } finally {
+                update();
+                button.disabled = false;
+            }
+        });
+    }
+
     breakExecution() {
+        this.cancelTyping();
         // Force a CPU break (emulates RUN/STOP key behavior in software)
         this.machine.pressStop();
     }
@@ -421,7 +537,7 @@ export class C64Emulator {
         if (this.paused) {
             // Just render the current state and continue the loop
             this.render();
-            requestAnimationFrame(() => this.loop());
+            this.animationId = requestAnimationFrame(() => this.loop());
             return;
         }
 
@@ -441,6 +557,7 @@ export class C64Emulator {
             this.timeAccumulator -= frameTime;
             this.frame++;
             framesRun++;
+            this.checkBasicReady();
 
             // Don't run too many frames in one go to keep UI responsive
             if (framesRun > 5) {
@@ -457,25 +574,48 @@ export class C64Emulator {
         // Every deferred key has now been held through a full frame, so the
         // KERNAL's scan has had a chance to see it.
         if (framesRun > 0 && this.pendingReleases.length > 0) {
-            for (const held of this.pendingReleases) {
-                this.machine.setKey(held.row, held.col, false);
+            const released = this.pendingReleases.splice(0);
+            for (const held of released) {
+                this.updateMatrixKey(held.row, held.col);
             }
-            this.pendingReleases.length = 0;
             this.updateShiftKey();
         }
+        if (framesRun > 0 && this.pendingJoystickReleases.length > 0) {
+            const released = this.pendingJoystickReleases.splice(0);
+            for (const held of released) this.updateJoystickKey(held.key);
+        }
 
-        requestAnimationFrame(() => this.loop());
+        this.animationId = requestAnimationFrame(() => this.loop());
     }
 
     render() {
         this.vicRenderer.render(this.ctx, this.machine.vic);
     }
 
+    enableKeyboard() {
+        if (this.keyboardEnabled) return;
+        this.keyboardEnabled = true;
+        document.addEventListener('keydown', event => this.handleKeyPress(event));
+        document.addEventListener('keyup', event => this.handleKeyRelease(event));
+        this.canvas.addEventListener('blur', () => this.releaseAllKeys());
+        window.addEventListener('blur', () => this.releaseAllKeys());
+    }
+
     handleKeyPress(e) {
+        if (e.defaultPrevented || e.isComposing || e.metaKey) return;
+        if (e.target !== this.canvas && e.target?.closest(
+            'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"])'
+        )) return;
+
+        // event.key can change between keydown and keyup when Shift is released.
+        const keyId = e.code || e.key;
         // If joystick mode is active, handle arrow keys and space as joystick
         if (this.activeJoystick > 0) {
             const k = e.key;
             if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === ' ') {
+                if (!this.heldJoystickKeys.has(keyId)) {
+                    this.heldJoystickKeys.set(keyId, { key: k, frame: this.frame });
+                }
                 this.handleJoystickKey(k, true);
                 e.preventDefault();
                 return;
@@ -483,6 +623,7 @@ export class C64Emulator {
         }
 
         if (e.key === 'Shift') {
+            this.heldShiftKeys.add(keyId);
             this.physicalShift = true;
             this.updateShiftKey();
             e.preventDefault();
@@ -496,9 +637,9 @@ export class C64Emulator {
         // The OS repeats keydown while a key is held. Ignore the repeats: the
         // C64's own repeat comes from the KERNAL scanning the held matrix, and
         // re-recording the press would keep pushing the release frame forward.
-        if (this.heldKeys.has(e.key)) return;
+        if (this.heldKeys.has(keyId)) return;
 
-        this.heldKeys.set(e.key, { ...mapped, frame: this.frame });
+        this.heldKeys.set(keyId, { ...mapped, frame: this.frame });
         this.machine.setKey(mapped.row, mapped.col, true);
         this.updateShiftKey();
     }
@@ -507,26 +648,29 @@ export class C64Emulator {
     // Handle key release events
     //
     handleKeyRelease(e) {
-        // Only handle joystick key releases when joystick mode is active
-        if (this.activeJoystick > 0) {
-            const k = e.key;
-            if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === ' ') {
-                this.handleJoystickKey(k, false);
-                e.preventDefault();
-                return;
+        const keyId = e.code || e.key;
+        const joystickKey = this.heldJoystickKeys.get(keyId);
+        if (joystickKey) {
+            this.heldJoystickKeys.delete(keyId);
+            if (joystickKey.frame === this.frame) {
+                this.pendingJoystickReleases.push(joystickKey);
+            } else {
+                this.updateJoystickKey(joystickKey.key);
             }
+            e.preventDefault();
+            return;
         }
 
-        if (e.key === 'Shift') {
-            this.physicalShift = false;
+        if (this.heldShiftKeys.delete(keyId)) {
+            this.physicalShift = this.heldShiftKeys.size > 0;
             this.updateShiftKey();
             e.preventDefault();
             return;
         }
 
-        const held = this.heldKeys.get(e.key);
+        const held = this.heldKeys.get(keyId);
         if (!held) return;
-        this.heldKeys.delete(e.key);
+        this.heldKeys.delete(keyId);
         e.preventDefault();
 
         // The KERNAL only scans the matrix once per frame. A keypress that both
@@ -535,9 +679,15 @@ export class C64Emulator {
         if (held.frame === this.frame) {
             this.pendingReleases.push(held);
         } else {
-            this.machine.setKey(held.row, held.col, false);
+            this.updateMatrixKey(held.row, held.col);
         }
         this.updateShiftKey();
+    }
+
+    updateMatrixKey(row, col) {
+        const down = [...this.heldKeys.values(), ...this.pendingReleases]
+            .some(held => held.row === row && held.col === col);
+        this.machine.setKey(row, col, down);
     }
 
     //
@@ -565,6 +715,9 @@ export class C64Emulator {
     releaseAllKeys() {
         this.machine.releaseAllKeys();
         this.heldKeys.clear();
+        this.heldShiftKeys.clear();
+        this.heldJoystickKeys.clear();
+        this.pendingJoystickReleases.length = 0;
         this.pendingReleases.length = 0;
         this.physicalShift = false;
         if (this.activeJoystick > 0) {
@@ -595,21 +748,18 @@ export class C64Emulator {
         }
     }
 
+    updateJoystickKey(key) {
+        const down = [...this.heldJoystickKeys.values(), ...this.pendingJoystickReleases]
+            .some(held => held.key === key);
+        this.handleJoystickKey(key, down);
+    }
+
     //
     // Enable joystick mode (arrow keys + space control joystick)
     // @param {number} port - Joystick port (1 or 2), or 0 to disable
     //
     setActiveJoystick(port) {
-        // Reset any currently pressed buttons
-        if (this.activeJoystick > 0) {
-            const oldPort = this.activeJoystick;
-            Object.keys(this.joystickState).forEach(button => {
-                if (this.joystickState[button]) {
-                    this.machine.setJoystickButton(oldPort, button, false);
-                    this.joystickState[button] = false;
-                }
-            });
-        }
+        this.releaseAllKeys();
         this.activeJoystick = port;
     }
 
@@ -635,14 +785,27 @@ export class C64Emulator {
     // going through the matrix, so it cannot collide with keys the user is
     // physically holding and needs no press/release timing.
     //
-    typeText(t) {
-        let delay = 0;
+    typeText(t, { lineDelay = 70 } = {}) {
         for (const ch of t) {
             if (ch === '\r') continue;  // CR/LF pairs are handled by the LF
             const code = ch === '\n' ? 13 : ch.toUpperCase().charCodeAt(0);
-            setTimeout(() => this.machine.addKey(code), delay);
-            delay += ch === '\n' ? 70 : 30;  // longer pause after a line
+            this.typingQueue.push({ code, delay: ch === '\n' ? lineDelay : 30 });
         }
+        if (this.typingTimer !== null || this.typingQueue.length === 0) return;
+        const typeNext = () => {
+            this.typingTimer = null;
+            const next = this.typingQueue.shift();
+            if (!next) return;
+            this.machine.addKey(next.code);
+            this.typingTimer = setTimeout(typeNext, next.delay);
+        };
+        this.typingTimer = setTimeout(typeNext, 0);
+    }
+
+    cancelTyping() {
+        if (this.typingTimer !== null) clearTimeout(this.typingTimer);
+        this.typingTimer = null;
+        this.typingQueue.length = 0;
     }
 
     snapshot() {
@@ -683,7 +846,7 @@ export class C64Emulator {
     //
     // Enable drag-and-drop of PRG files onto the emulator canvas
     //
-    // When a .prg file is dropped, it will be loaded into memory and executed.
+    // PRG files are loaded after startup; CRT files reset into the cartridge.
     //
     enableDragAndDrop() {
         const canvas = this.canvas;
@@ -713,19 +876,22 @@ export class C64Emulator {
             const name = file.name.toLowerCase();
 
             try {
+                if (!name.endsWith('.prg') && !name.endsWith('.crt')) {
+                    throw new Error('Unsupported file type. Choose a .prg or .crt file.');
+                }
                 const arrayBuffer = await file.arrayBuffer();
                 const data = new Uint8Array(arrayBuffer);
 
                 // Handle different file types
                 if (name.endsWith('.prg')) {
-                    this.loadPrgFile(data, file.name);
-                } else if (name.endsWith('.crt')) {
-                    this.loadCrtFile(data, file.name);
+                    await this.loadPrgFile(data, file.name);
                 } else {
-                    console.warn('Unsupported file type. Supported: .prg, .crt');
+                    this.loadCrtFile(data, file.name);
                 }
+                if (this.statusElement) this.statusElement.textContent = `Loaded ${file.name}.`;
             } catch (err) {
                 console.error('Failed to load file:', err);
+                if (this.statusElement) this.statusElement.textContent = `Could not load file: ${err.message}`;
             }
         });
     }
@@ -736,11 +902,13 @@ export class C64Emulator {
     // @param {Uint8Array} data - The PRG file data (with 2-byte load address header)
     // @param {string} [filename] - Optional filename for logging
     //
-    loadPrgFile(data, filename = 'program.prg') {
+    async loadPrgFile(data, filename = 'program.prg') {
         if (data.length < 3) {
-            console.error('PRG file too small');
-            return;
+            throw new Error('PRG file must contain a load address and program data.');
         }
+        const generation = this.bootGeneration;
+        await this.whenBasicReady();
+        if (generation !== this.bootGeneration) throw new Error('Program loading was interrupted by reset.');
 
         // Load the PRG into memory
         const loadAddress = this.machine.loadPrg(data);
@@ -756,12 +924,8 @@ export class C64Emulator {
     // @param {string} [filename] - Optional filename for logging
     //
     loadCrtFile(data, filename = 'cartridge.crt') {
-        try {
-            this.machine.loadCrt(data);
-            this.machine.reset();
-        } catch (err) {
-            console.error(`Failed to load ${filename}:`, err.message);
-        }
+        this.machine.loadCrt(data);
+        this.reset({ keepCartridge: true });
     }
 }
 

@@ -286,18 +286,20 @@ export class SID {
         }
     }
 
+    // Device inspection must not refresh or replace the SID's floating bus latch.
+    peek(offset) {
+        switch (offset) {
+            case 0x19: case 0x1a: return 0xff;
+            case 0x1b: return this.voice[2].wave().readOSC();
+            case 0x1c: return this.voice[2].envelope().readENV();
+            default: return this.busValue;
+        }
+    }
+
     read(offset) {
         switch (offset) {
-            case 0x19: case 0x1a:
-                this.busValue = 0xff;
-                this.busValueTtl = this.modelTTL;
-                break;
-            case 0x1b:
-                this.busValue = this.voice[2].wave().readOSC();
-                this.busValueTtl = this.modelTTL;
-                break;
-            case 0x1c:
-                this.busValue = this.voice[2].envelope().readENV();
+            case 0x19: case 0x1a: case 0x1b: case 0x1c:
+                this.busValue = this.peek(offset);
                 this.busValueTtl = this.modelTTL;
                 break;
             default:

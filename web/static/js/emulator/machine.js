@@ -14,7 +14,7 @@
 //
 // Architecture:
 //   C64Machine (Bus interface)
-//     ├── MOS6510 CPU (cycle-exact 6502/6510)
+//     ├── MOS6510 CPU (instruction-level 6502/6510 timing)
 //     ├── SID chip (MOS6581/MOS8580 audio)
 //     ├── 64KB RAM
 //     ├── ROM mapping (BASIC $A000, KERNAL $E000)
@@ -33,7 +33,7 @@ import { MOS6510, FLAG_I } from './mos6510.js';
 import { SID, ChipModel, SamplingMethod } from './sid.js';
 import { rom_basic, rom_kernal, rom_chars } from './roms.js';
 import { Cartridge } from './cartridge.js';
-import { VICIIRenderer, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT, FIRST_VISIBLE_RASTER, VISIBLE_RASTER_LINES, VIC_CTRL1, VIC_CTRL2 } from './vic-ii.js';
+import { VICIIRenderer, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT } from './vic-ii.js';
 
 // ============================================================================
 // CLOCK FREQUENCIES
@@ -48,11 +48,12 @@ export const CLOCK_NTSC = 1022727;
 // Timing constants
 const CYCLES_PER_FRAME_PAL = 19656;   // PAL: ~50 Hz (985248 / 50.125)
 const CYCLES_PER_FRAME_NTSC = 17095;  // NTSC: ~60 Hz (1022727 / 59.826)
-const CYCLES_PER_FRAME = CYCLES_PER_FRAME_PAL;
-
-// VIC-II raster timing (PAL)
-const CYCLES_PER_RASTER_LINE = 63;    // CPU cycles per raster line
-const RASTER_LINES_PER_FRAME = 312;   // Total raster lines (PAL)
+const RASTER_TIMING_PAL = Object.freeze({
+    cyclesPerLine: 63, linesPerFrame: 312, cyclesPerFrame: CYCLES_PER_FRAME_PAL
+});
+const RASTER_TIMING_NTSC = Object.freeze({
+    cyclesPerLine: 65, linesPerFrame: 263, cyclesPerFrame: CYCLES_PER_FRAME_NTSC
+});
 
 // Memory addresses
 const KEYBUF_LEN_ADDR = 0x00C6;
@@ -74,7 +75,7 @@ const C64_CIA2_BASE = 0xDD00;
 // - write(addr, val): Write byte to memory/I/O
 //
 // Integrates:
-// - MOS6510 cycle-exact CPU
+// - MOS6510 CPU with per-instruction cycle counts
 // - SID sound chip
 // - Memory banking (BASIC ROM, KERNAL ROM, Character ROM)
 // - VIC-II video (simplified)
@@ -82,8 +83,11 @@ const C64_CIA2_BASE = 0xDD00;
 //
 export class C64Machine {
     constructor(options = {}) {
-        // RAM (64KB)
+        // Physical RAM is distinct from the chips selected by the CPU's I/O
+        // mapping. io holds hardware latches/color RAM at offsets from $D000.
+        // Inspect mapped memory with peek(), or hardware with peekIO().
         this.ram = new Uint8Array(65536);
+        this.io = new Uint8Array(0x1000);
 
         // CPU - pass 'this' as the Bus interface
         this.cpu = new MOS6510(this);
@@ -176,7 +180,7 @@ export class C64Machine {
         this.audioSamplesGenerated = 0;
 
         // Frame timing
-        this.cyclesPerFrame = options.cyclesPerFrame || CYCLES_PER_FRAME;
+        this.cyclesPerFrame = options.cyclesPerFrame || this.rasterTiming.cyclesPerFrame;
         this.frameCycleStart = 0;
 
         // Memory banking flags (cache)
@@ -187,9 +191,10 @@ export class C64Machine {
 
         // Memory Map Optimization
         // 256 pages of 256 bytes.
-        // Each entry is: 0=RAM, 1=BASIC, 2=KERNAL, 3=CHAR, 4=I/O, 5=CART_LO, 6=CART_HI
+        // Read: 0=RAM, 1=BASIC, 2=KERNAL, 3=CHAR, 4=I/O, 5=CART_LO,
+        // 6=CART_HI, 7=open bus. Write: 0=RAM, 1=I/O, 2=unmapped.
         this.readMap = new Uint8Array(256);
-        this.writeMap = new Uint8Array(256); // Mostly 0 (RAM), 1 for I/O
+        this.writeMap = new Uint8Array(256);
 
         // Cartridge ROM (optional)
         this.cartRomL = null;  // ROML at $8000-$9FFF (8KB) - legacy
@@ -203,13 +208,20 @@ export class C64Machine {
         this.reset();
     }
 
+    get rasterTiming() {
+        return this.clockFrequency === CLOCK_NTSC ? RASTER_TIMING_NTSC : RASTER_TIMING_PAL;
+    }
+
     //
     // Reset the machine
     //
     reset() {
         this.ram.fill(0);
+        this.io.fill(0);
         this.sid.reset();
         this.keyboardMatrix.fill(0xFF);
+        this.audioSamplesGenerated = 0;
+        this.frameCycleStart = 0;
 
         // Reset CIA1 timer state
         this.cia1.timerALatch = 0x4025;
@@ -246,12 +258,13 @@ export class C64Machine {
         this.vic.irqStatus = 0;
         this.vic.lastRasterLine = -1;
         this.vic.rasterCycle = 0;
+        this.vic.badLineStunned = false;
+        this.vic.frameBuffer.fill(0);
 
         // Initialize important C64 memory locations
         // Set up some basic system vectors and initial values
         this.ram[0x0000] = 0x2F;  // Data direction register for port A
         this.ram[0x0001] = 0x07;  // Memory configuration register (RAM/ROM banking)
-        this.updateMemoryMap();   // Initialize banking flags
 
         // Keyboard buffer
         this.ram[0x00C6] = 0x00;  // Keyboard buffer length
@@ -259,24 +272,14 @@ export class C64Machine {
         // Screen/cursor variables - let ROM initialize these
         this.ram[0x0286] = 0x0E;  // Current color (light blue)
 
-        // VIC-II registers (would normally be at 0xD000-0xD3FF)
-        this.ram[VIC_CTRL1] = 0x1B;  // Control register 1: YSCROLL=3, DEN=1, RSEL=1 (25 rows)
-        this.ram[VIC_CTRL2] = 0x08;  // Control register 2: XSCROLL=0, CSEL=1 (40 columns)
-        this.ram[0xD020] = 0x0E;  // Border color (light blue)
-        this.ram[0xD021] = 0x06;  // Background color (blue)
+        this.io[0x011] = 0x1B;  // YSCROLL=3, DEN=1, RSEL=1 (25 rows)
+        this.io[0x016] = 0x08;  // XSCROLL=0, CSEL=1 (40 columns)
+        this.io[0x020] = 0x0E;  // Border color (light blue)
+        this.io[0x021] = 0x06;  // Background color (blue)
 
         // Initialize sprite registers
-        this.ram[0xD015] = 0x00;  // Sprite enable register (all disabled)
-        this.ram[0xD010] = 0x00;  // Sprites 0-7 X position MSB
-        this.ram[0xD017] = 0x00;  // Sprites 0-7 Y expand
-        this.ram[0xD01C] = 0x00;  // Sprites 0-7 multicolor mode
-        this.ram[0xD01D] = 0x00;  // Sprites 0-7 X expand
-        this.ram[0xD025] = 0x00;  // Sprite multicolor register 0
-        this.ram[0xD026] = 0x00;  // Sprite multicolor register 1
-
-        // Initialize sprite colors (0xD027-0xD02E)
         for (let i = 0; i < 8; i++) {
-            this.ram[0xD027 + i] = i + 1;
+            this.io[0x027 + i] = i + 1;
         }
 
         // Initialize sprite data pointers
@@ -295,19 +298,18 @@ export class C64Machine {
         // Initialize CIA2 Port A ($DD00) for VIC bank selection
         // Bits 0-1 are inverted: 11 = bank 0 ($0000-$3FFF)
         // Default value also sets DDR for serial bus lines
-        this.ram[0xDD00] = 0x03;  // VIC bank 0 (bits 0-1 = 11 inverted = 00 = bank 0)
-        this.ram[0xDD02] = 0x3F;  // CIA2 DDRA - bits 0-5 are outputs
+        this.io[0xD00] = 0x03;  // VIC bank 0 (bits 0-1 = 11 inverted = 00 = bank 0)
+        this.io[0xD02] = 0x3F;  // CIA2 DDRA - bits 0-5 are outputs
 
         // Initialize VIC-II memory pointer ($D018)
         // Default: Screen at $0400, Char ROM at $1000
-        this.ram[0xD018] = 0x14;  // Screen at $0400 (bits 4-7 = 1), Char at $1000 (bits 1-3 = 2)
+        this.io[0x018] = 0x14;  // Screen at $0400, character ROM at $1000
 
         // Reset cartridge BEFORE CPU so reset vector comes from cartridge ROM
         if (this.cartridge) {
             this.cartridge.reset();
-            this.cartExrom = this.cartridge.exrom === 1;
-            this.cartGame = this.cartridge.game === 1;
         }
+        this.updateCartridgeMapping();
 
         // Reset CPU (reads reset vector from ROM or cartridge)
         this.cpu.reset();
@@ -325,8 +327,8 @@ export class C64Machine {
         }
 
         this.cartridge = cartridge;
-        this.cartExrom = cartridge.exrom === 1;
-        this.cartGame = cartridge.game === 1;
+        this.cartRomL = null;
+        this.cartRomH = null;
 
         // Reset machine with cartridge installed
         this.reset();
@@ -337,15 +339,7 @@ export class C64Machine {
     // Eject the current cartridge
     //
     ejectCartridge() {
-        if (this.cartridge) {
-            this.cartridge.eject();
-            this.cartridge = null;
-        }
-        this.cartExrom = true;
-        this.cartGame = true;
-        this.cartRomL = null;
-        this.cartRomH = null;
-
+        this.removeCartridge();
         this.reset();
     }
 
@@ -357,62 +351,61 @@ export class C64Machine {
         return this.cartridge ? this.cartridge.getInfo() : null;
     }
 
+    // Cartridge I/O can change its lines or disable it without a CPU-port
+    // write. Keep the cached PLA map coherent before the next bus access.
+    updateCartridgeMapping() {
+        if (this.cartridge) {
+            this.cartExrom = !this.cartridge.enabled || this.cartridge.exrom === 1;
+            this.cartGame = !this.cartridge.enabled || this.cartridge.game === 1;
+        }
+        this.updateMemoryMap();
+    }
+
     //
-    // Update memory banking flags based on $0001
+    // Rebuild the PLA map from effective 6510 pins and cartridge line levels.
+    // Reference: https://www.c64-wiki.com/wiki/Bank_Switching#Mode_Table
     //
     updateMemoryMap() {
-        const bank = this.ram[1];
-        // Bit 0 (LORAM): BASIC ROM at $A000-$BFFF
-        // Bit 1 (HIRAM): KERNAL ROM at $E000-$FFFF
-        // Bit 2 (CHAREN): 0=Char ROM, 1=I/O at $D000-$DFFF
+        const bank = (this.ram[1] & this.ram[0]) | (0x17 & ~this.ram[0]);
+        const loram = (bank & 1) !== 0;
+        const hiram = (bank & 2) !== 0;
+        const charen = (bank & 4) !== 0;
+        const mode16K = !this.cartGame && !this.cartExrom;
+        const ultimax = !this.cartGame && this.cartExrom;
 
-        this.isBasicOn = (bank & 3) === 3;
-        this.isKernalOn = (bank & 2) !== 0;
-        this.isIOOn = (bank & 4) !== 0 && (bank & 3) !== 0;
-        this.isCharOn = (bank & 4) === 0 && (bank & 3) !== 0;
+        this.isBasicOn = !mode16K && !ultimax && loram && hiram;
+        this.isKernalOn = !ultimax && hiram;
+        this.isIOOn = ultimax || (charen && (loram || hiram));
+        this.isCharOn = !ultimax && !charen && (hiram || (loram && !mode16K));
 
-        // Update Page Tables
-        // 1. Default all to RAM (0)
         this.readMap.fill(0);
+        this.writeMap.fill(0);
 
-        // 2. Map ROMs
-        if (this.isBasicOn) this.readMap.fill(1, 0xA0, 0xC0); // 0xA000 - 0xBFFF
-        if (this.isKernalOn) this.readMap.fill(2, 0xE0, 0x100); // 0xE000 - 0xFFFF
+        if (ultimax) {
+            // Only the first 4KB of RAM is selected in Ultimax. Floating bus
+            // reads are approximated as $FF; unmapped writes do not reach RAM.
+            this.readMap.fill(7, 0x10, 0x80);
+            this.readMap.fill(7, 0xA0, 0xD0);
+            this.writeMap.fill(2, 0x10);
+        }
 
-        // 3. Map I/O & Char
+        if (this.isBasicOn) this.readMap.fill(1, 0xA0, 0xC0);
+        if (this.isKernalOn) this.readMap.fill(2, 0xE0, 0x100);
+
         if (this.isIOOn) {
-            this.readMap.fill(4, 0xD0, 0xE0); // I/O
-            this.writeMap.fill(1, 0xD0, 0xE0); // I/O writes
-        } else {
-            this.writeMap.fill(0, 0xD0, 0xE0); // RAM writes
-            if (this.isCharOn) {
-                this.readMap.fill(3, 0xD0, 0xE0); // Char ROM
-            }
+            this.readMap.fill(4, 0xD0, 0xE0);
+            this.writeMap.fill(1, 0xD0, 0xE0);
+        } else if (this.isCharOn) {
+            this.readMap.fill(3, 0xD0, 0xE0);
         }
 
-        // 4. Cartridge overrides (Legacy & CRT)
-        // Check for CRT cartridge first (modern approach), then legacy
-        const hasRomL = this.cartRomL || (this.cartridge && this.cartridge.enabled && this.cartridge.romlBank);
-        const hasRomH = this.cartRomH || (this.cartridge && this.cartridge.enabled && this.cartridge.romhBank);
-
-        // ROML mapping: When EXROM=0, ROML appears at $8000-$9FFF
-        // cartExrom is true when EXROM line is HIGH (inactive), false when LOW (active)
-        if (hasRomL && !this.cartExrom) {
-            this.readMap.fill(5, 0x80, 0xA0); // $8000-$9FFF
+        if (ultimax || (!this.cartExrom && loram && hiram)) {
+            this.readMap.fill(5, 0x80, 0xA0);
         }
-
-        // ROMH mapping depends on mode:
-        // - 16K mode (EXROM=0, GAME=0): ROMH at $A000-$BFFF, replaces BASIC ROM
-        // - Ultimax mode (EXROM=1, GAME=0): ROMH at $E000-$FFFF, replaces KERNAL ROM
-        // cartGame is true when GAME line is HIGH (inactive), false when LOW (active)
-        if (hasRomH) {
-            if (!this.cartGame && !this.cartExrom) {
-                // 16K mode: ROMH at $A000-$BFFF
-                this.readMap.fill(6, 0xA0, 0xC0);
-            } else if (!this.cartGame && this.cartExrom) {
-                // Ultimax mode: ROMH at $E000-$FFFF
-                this.readMap.fill(6, 0xE0, 0x100);
-            }
+        if (mode16K && hiram) {
+            this.readMap.fill(6, 0xA0, 0xC0);
+        } else if (ultimax) {
+            this.readMap.fill(6, 0xE0, 0x100);
         }
     }
 
@@ -440,23 +433,7 @@ export class C64Machine {
         if (type === 2) return rom_kernal[addr & 0x1FFF];
         if (type === 3) return rom_chars[addr & 0x0FFF];
 
-        if (type === 4) { // I/O
-            // I/O area - use cascading checks (ordered by frequency/address)
-            if (addr < 0xD400) return this.readVIC(addr);
-            if (addr < 0xD800) return this.sid.read(addr & 0x1F);
-            if (addr < 0xDC00) return this.ram[addr] & 0x0F;  // Color RAM
-            if (addr < 0xDD00) return this.readCIA1(addr);
-            if (addr < 0xDE00) return this.readCIA2(addr);
-            // I/O expansion ($DE00-$DFFF) - check cartridge for bank switching
-            if (this.cartridge && this.cartridge.enabled) {
-                const cartResult = this.cartridge.readIO(addr);
-                // Update local EXROM/GAME lines from cartridge
-                this.cartExrom = this.cartridge.exrom === 1;
-                this.cartGame = this.cartridge.game === 1;
-                if (cartResult !== null) return cartResult;
-            }
-            return this.ram[addr];
-        }
+        if (type === 4) return this.readIO(addr);
 
         if (type === 5) { // CART_LO ($8000-$9FFF)
             // Check CRT cartridge first
@@ -465,7 +442,7 @@ export class C64Machine {
                 if (cartByte !== null) return cartByte;
             }
             // Legacy cartridge support
-            return this.cartRomL ? this.cartRomL[addr & 0x1FFF] : this.ram[addr];
+            return this.cartRomL ? (this.cartRomL[addr & 0x1FFF] ?? 0xFF) : 0xFF;
         }
 
         if (type === 6) { // CART_HI ($A000-$BFFF or $E000-$FFFF)
@@ -475,9 +452,10 @@ export class C64Machine {
                 if (cartByte !== null) return cartByte;
             }
             // Legacy cartridge support
-            return this.cartRomH ? this.cartRomH[addr & 0x1FFF] : this.ram[addr];
+            return this.cartRomH ? (this.cartRomH[addr & 0x1FFF] ?? 0xFF) : 0xFF;
         }
 
+        if (type === 7) return 0xFF;
         return this.ram[addr];
     }
 
@@ -497,23 +475,14 @@ export class C64Machine {
         if (type === 2) return rom_kernal[addr & 0x1FFF];
         if (type === 3) return rom_chars[addr & 0x0FFF];
 
-        if (type === 4) {  // I/O: report the latched register contents
-            if (addr < 0xD400) {
-                // The raster counter is live rather than latched
-                if (addr === 0xD012) return ((this.vic.rasterCycle / CYCLES_PER_RASTER_LINE) | 0) & 0xFF;
-                return this.ram[addr];
-            }
-            if (addr < 0xD800) return this.sid.busValue;
-            if (addr < 0xDC00) return this.ram[addr] & 0x0F;  // Color RAM
-            return this.ram[addr];
-        }
+        if (type === 4) return this.peekIO(addr);
 
         if (type === 5) {
             if (this.cartridge && this.cartridge.enabled) {
                 const cartByte = this.cartridge.read(addr);
                 if (cartByte !== null) return cartByte;
             }
-            return this.cartRomL ? this.cartRomL[addr & 0x1FFF] : this.ram[addr];
+            return this.cartRomL ? (this.cartRomL[addr & 0x1FFF] ?? 0xFF) : 0xFF;
         }
 
         if (type === 6) {
@@ -521,10 +490,36 @@ export class C64Machine {
                 const cartByte = this.cartridge.read(addr);
                 if (cartByte !== null) return cartByte;
             }
-            return this.cartRomH ? this.cartRomH[addr & 0x1FFF] : this.ram[addr];
+            return this.cartRomH ? (this.cartRomH[addr & 0x1FFF] ?? 0xFF) : 0xFF;
         }
 
+        if (type === 7) return 0xFF;
+        if (addr === 1) return (this.ram[1] & this.ram[0]) | (0x17 & ~this.ram[0]);
         return this.ram[addr];
+    }
+
+    //
+    // Inspect hardware at $D000-$DFFF regardless of the CPU's banking.
+    // Unlike read(), this never acknowledges interrupts, clears collision
+    // latches, or switches cartridge banks. Register mirrors are decoded.
+    //
+    peekIO(addr) {
+        return this.readIO(addr, false);
+    }
+
+    readIO(addr, sideEffects = true) {
+        if (addr < 0xD000 || addr > 0xDFFF) throw new RangeError('I/O address out of range');
+        if (addr < 0xD400) return this.readVIC(addr, sideEffects);
+        if (addr < 0xD800) return sideEffects ? this.sid.read(addr & 0x1F) : this.sid.peek(addr & 0x1F);
+        if (addr < 0xDC00) return this.io[addr & 0xFFF] & 0x0F;
+        if (addr < 0xDD00) return this.readCIA1(addr, sideEffects);
+        if (addr < 0xDE00) return this.readCIA2(addr, sideEffects);
+        if (this.cartridge) {
+            const value = this.cartridge.readIO(addr, sideEffects);
+            if (sideEffects) this.updateCartridgeMapping();
+            if (value !== null) return value;
+        }
+        return this.io[addr & 0xFFF];
     }
 
     //
@@ -542,57 +537,49 @@ export class C64Machine {
                 this.ram[addr] = val;
                 return;
             }
-            if (addr === 0) {
-                this.ram[0] = val;
-                return;
-            }
-            // addr === 1: Only output bits (DDR=1) can be written
-            // But we store the full value in the latch (ram[1])
-            this.ram[1] = val;
+            // Both the data latch and DDR can change effective banking pins.
+            this.ram[addr] = val;
             this.updateMemoryMap();
             return;
         }
 
-        // I/O Write (type === 1)
-        // $D000-$DFFF: Check if I/O is visible
+        if (this.writeMap[page] === 1) this.writeIO(addr, val);
+    }
 
-        // I/O visible when CHAREN=1 (bit 2) AND (HIRAM=1 OR LORAM=1)
-        // i.e., (bank & 4) !== 0 AND (bank & 3) !== 0
-        if (!this.isIOOn) {
-            this.ram[addr] = val;
-            return;
-        }
-
-        // I/O writes - route by sub-range
+    //
+    // Configure hardware independently of CPU banking (e.g. a SID loader).
+    // Emulated CPU stores must use write(), which selects I/O or underlying RAM.
+    //
+    writeIO(addr, val) {
+        if (addr < 0xD000 || addr > 0xDFFF) throw new RangeError('I/O address out of range');
+        val &= 0xFF;
         if (addr < 0xD400) {
-            // VIC-II - handle special registers inline for speed
-            switch (addr) {
-                case VIC_CTRL1:
-                    this.ram[addr] = val;
-                    this.vic.rasterCompare = (this.ram[0xD012] & 0xFF) | ((val & 0x80) << 1);
+            const reg = addr & 0x3F;
+            switch (reg) {
+                case 0x11:
+                    this.io[reg] = val;
+                    this.vic.rasterCompare = this.io[0x012] | ((val & 0x80) << 1);
                     return;
-                case 0xD012:
-                    this.ram[addr] = val;
-                    this.vic.rasterCompare = ((this.ram[VIC_CTRL1] & 0x80) << 1) | val;
+                case 0x12:
+                    this.io[reg] = val;
+                    this.vic.rasterCompare = ((this.io[0x011] & 0x80) << 1) | val;
                     return;
-                case 0xD019:
+                case 0x19:
                     // Acknowledge interrupts (clear by writing 1s)
                     this.vic.irqStatus &= ~(val & 0x0F);
-                    if ((this.vic.irqStatus & 0x0F) === 0) this.vic.irqStatus &= 0x7F;
-                    this.ram[addr] = this.vic.irqStatus;
                     this.updateIRQLine();
                     return;
-                case 0xD01A:
+                case 0x1A:
                     this.vic.irqEnable = val & 0x0F;
-                    this.ram[addr] = val;
+                    this.io[reg] = val;
+                    this.updateIRQLine();
                     return;
-                case 0xD020:
-                case 0xD021:
-                    // Border/background color - just store, color captured at raster line start
-                    this.ram[addr] = val;
+                case 0x1E:
+                case 0x1F:
+                    // Collision latches are read-only and clear only on a CPU read.
                     return;
                 default:
-                    this.ram[addr] = val;
+                    this.io[reg] = val;
                     return;
             }
         }
@@ -605,7 +592,7 @@ export class C64Machine {
 
         if (addr < 0xDC00) {
             // Color RAM (4-bit)
-            this.ram[addr] = val & 0x0F;
+            this.io[addr & 0xFFF] = val & 0x0F;
             return;
         }
 
@@ -622,42 +609,41 @@ export class C64Machine {
         // I/O expansion area ($DE00-$DFFF) - check for cartridge first
         if (this.cartridge && this.cartridge.enabled) {
             this.cartridge.write(addr, val);
-            // Update local EXROM/GAME lines from cartridge
-            this.cartExrom = this.cartridge.exrom === 1;
-            this.cartGame = this.cartridge.game === 1;
+            this.updateCartridgeMapping();
         }
-        this.ram[addr] = val;
+        this.io[addr & 0xFFF] = val;
     }
 
     //
     // Read from VIC-II registers
     //
-    readVIC(addr) {
+    readVIC(addr, sideEffects = true) {
         // Calculate current raster line from global cycle counter
-        const rasterLine = ((this.vic.rasterCycle / CYCLES_PER_RASTER_LINE) | 0);
+        const rasterLine = ((this.vic.rasterCycle / this.rasterTiming.cyclesPerLine) | 0);
+        const reg = addr & 0x3F;
 
-        switch (addr) {
-            case 0xD012:
+        switch (reg) {
+            case 0x12:
                 // Raster line counter (low 8 bits)
                 return rasterLine & 0xFF;
-            case VIC_CTRL1:
+            case 0x11:
                 // Screen control + raster MSB (bit 7 = raster bit 8)
-                return (this.ram[addr] & 0x7F) | ((rasterLine & 0x100) >> 1);
-            case 0xD019:
+                return (this.io[reg] & 0x7F) | ((rasterLine & 0x100) >> 1);
+            case 0x19:
                 // Return VIC IRQ status (bit 7 set if any enabled IRQ is active)
                 return this.vic.irqStatus;
-            case 0xD01A:
+            case 0x1A:
                 // Interrupt enable register
                 return this.vic.irqEnable;
-            case 0xD01E:
-            case 0xD01F: {
+            case 0x1E:
+            case 0x1F: {
                 // Sprite-sprite / sprite-background collision latches clear on read
-                const collisions = this.ram[addr];
-                this.ram[addr] = 0;
+                const collisions = this.io[reg];
+                if (sideEffects) this.io[reg] = 0;
                 return collisions;
             }
             default:
-                return this.ram[addr];
+                return this.io[reg];
         }
     }
 
@@ -665,7 +651,7 @@ export class C64Machine {
     // Read from CIA1 registers
     // CIA1 handles keyboard, joystick, and system timer IRQ
     //
-    readCIA1(addr) {
+    readCIA1(addr, sideEffects = true) {
         const reg = addr & 0x0F;
 
         switch (reg) {
@@ -673,8 +659,8 @@ export class C64Machine {
                 // Port A - keyboard row select (output) / Joystick 2 (input).
                 // Pins configured as inputs float high, output pins read their
                 // latch; either way a grounded switch pulls the line low.
-                const paOut = this.ram[0xDC00] | ~this.ram[0xDC02];
-                const pbOut = this.ram[0xDC01] | ~this.ram[0xDC03];
+                const paOut = this.io[0xC00] | ~this.io[0xC02];
+                const pbOut = this.io[0xC01] | ~this.io[0xC03];
                 let value = paOut & this.joystick2;
 
                 // Reverse scan: a column driven low on port B pulls every row
@@ -692,8 +678,8 @@ export class C64Machine {
 
             case 0x01: {
                 // Port B - keyboard column read (input) / Joystick 1
-                const paOut = this.ram[0xDC00] | ~this.ram[0xDC02];
-                let value = (this.ram[0xDC01] | ~this.ram[0xDC03]) & this.joystick1;
+                const paOut = this.io[0xC00] | ~this.io[0xC02];
+                let value = (this.io[0xC01] | ~this.io[0xC03]) & this.joystick1;
 
                 for (let row = 0; row < 8; row++) {
                     if (paOut & (1 << row)) continue;  // row not selected
@@ -720,9 +706,10 @@ export class C64Machine {
                 // Bit 0: Timer A underflow
                 // Bit 1: Timer B underflow
                 const icrValue = this.cia1.icrData;
-                this.cia1.icrData = 0; // Clear on read
-                // Update IRQ line - may clear IRQ if no other sources active
-                this.updateIRQLine();
+                if (sideEffects) {
+                    this.cia1.icrData = 0;
+                    this.updateIRQLine();
+                }
                 return icrValue;
 
             case 0x0E: // Control Register A
@@ -732,7 +719,7 @@ export class C64Machine {
                 return this.cia1.crb;
 
             default:
-                return this.ram[addr];
+                return this.io[0xC00 + reg];
         }
     }
 
@@ -780,6 +767,10 @@ export class C64Machine {
                 }
                 this.cia1.timerAIrqEnabled = (this.cia1.icrMask & 0x01) !== 0;
                 this.cia1.timerBIrqEnabled = (this.cia1.icrMask & 0x02) !== 0;
+                if (this.cia1.icrData & this.cia1.icrMask & 0x03) {
+                    this.cia1.icrData |= 0x80;
+                }
+                this.updateIRQLine();
                 break;
 
             case 0x0E: // Control Register A
@@ -808,7 +799,7 @@ export class C64Machine {
                 break;
 
             default:
-                this.ram[addr] = val;
+                this.io[0xC00 + reg] = val;
         }
     }
 
@@ -816,12 +807,12 @@ export class C64Machine {
     // Read from CIA2 registers
     // CIA2 handles VIC bank selection and NMI timer
     //
-    readCIA2(addr) {
+    readCIA2(addr, sideEffects = true) {
         const reg = addr & 0x0F;
 
         switch (reg) {
             case 0x00: // Port A - VIC bank selection
-                return this.ram[addr];  // Return output latch (bits 0-1 are outputs)
+                return (this.io[0xD00] | ~this.io[0xD02]) & 0xFF;
 
             case 0x04: // Timer A Low byte
                 return this.cia2.timerACounter & 0xFF;
@@ -841,9 +832,10 @@ export class C64Machine {
                 // Bit 0: Timer A underflow
                 // Bit 1: Timer B underflow
                 const icrValue = this.cia2.icrData;
-                this.cia2.icrData = 0; // Clear on read
-                // Update NMI line state - clearing interrupt may release NMI
-                this.updateNMI();
+                if (sideEffects) {
+                    this.cia2.icrData = 0;
+                    this.updateNMI();
+                }
                 return icrValue;
 
             case 0x0E: // Control Register A
@@ -853,7 +845,7 @@ export class C64Machine {
                 return this.cia2.crb;
 
             default:
-                return this.ram[addr];
+                return this.io[0xD00 + reg];
         }
     }
 
@@ -865,7 +857,7 @@ export class C64Machine {
 
         switch (reg) {
             case 0x00: // Port A - VIC bank selection
-                this.ram[addr] = val;
+                this.io[0xD00] = val;
                 break;
 
             case 0x04: // Timer A Low latch
@@ -935,7 +927,7 @@ export class C64Machine {
                 break;
 
             default:
-                this.ram[addr] = val;
+                this.io[0xD00 + reg] = val;
         }
     }
 
@@ -945,7 +937,8 @@ export class C64Machine {
     //
     updateNMI() {
         // NMI is active when interrupt occurred AND NMI is enabled for that source
-        const nmiActive = (this.cia2.icrData & 0x01) && this.cia2.timerANmiEnabled;
+        const nmiActive = (this.cia2.icrData & this.cia2.icrMask & 0x03) !== 0;
+        if (nmiActive) this.cia2.icrData |= 0x80;
 
         if (nmiActive && this.cia2.nmiLine) {
             // High to low transition - trigger NMI
@@ -962,10 +955,8 @@ export class C64Machine {
     // IRQ is level-triggered - CPU sees IRQ as long as any source is active
     //
     updateIRQLine() {
-        // Check all IRQ sources:
-        // 1. VIC-II: irqStatus bit 7 set means active IRQ
-        // 2. CIA1: icrData bit 7 set means active IRQ
-        const vicIRQ = (this.vic.irqStatus & 0x80) !== 0;
+        const vicIRQ = (this.vic.irqStatus & this.vic.irqEnable & 0x0F) !== 0;
+        this.vic.irqStatus = (this.vic.irqStatus & 0x0F) | (vicIRQ ? 0x80 : 0);
         const ciaIRQ = (this.cia1.icrData & 0x80) !== 0;
 
         if (vicIRQ || ciaIRQ) {
@@ -981,7 +972,7 @@ export class C64Machine {
     // @param {string} timer - 'A' or 'B'
     // @param {number} cycles - Number of cycles to tick
     // @param {Function} triggerInterrupt - Function to call when interrupt fires
-    // @returns {boolean} True if timer underflowed
+    // @returns {number} Underflow count (Timer B may count these rather than phi2)
     //
     tickCIATimer(cia, timer, cycles, triggerInterrupt) {
         const isTimerA = timer === 'A';
@@ -996,15 +987,20 @@ export class C64Machine {
 
         cia[counterKey] -= cycles;
 
-        if (cia[counterKey] <= 0) {
-            // Reload from latch
-            cia[counterKey] += cia[latchKey];
+        if (cia[counterKey] < 0) {
+            // A timer counts through zero. Account for every reload when a
+            // whole instruction or Bad Line stall crosses several periods.
+            const period = cia[latchKey] + 1;
+            let underflows = Math.ceil(-cia[counterKey] / period);
+            cia[counterKey] += underflows * period;
 
             // Set timer interrupt flag
             cia.icrData |= irqFlag;
 
             // One-shot mode: stop timer after underflow (CR bit 3)
             if (cia[crKey] & 0x08) {
+                underflows = 1;
+                cia[counterKey] = cia[latchKey];
                 cia[runningKey] = false;
                 cia[crKey] &= ~0x01; // Clear start bit
             }
@@ -1015,9 +1011,9 @@ export class C64Machine {
                 triggerInterrupt();
             }
 
-            return true;
+            return underflows;
         }
-        return false;
+        return 0;
     }
 
     //
@@ -1025,24 +1021,8 @@ export class C64Machine {
     // @param {Object} cia - CIA state object
     // @param {Function} triggerInterrupt - Function to call when interrupt fires
     //
-    tickCIATimerBFromA(cia, triggerInterrupt) {
-        const irqEnabledKey = cia === this.cia1 ? 'timerBIrqEnabled' : 'timerBNmiEnabled';
-
-        cia.timerBCounter--;
-        if (cia.timerBCounter < 0) {
-            cia.timerBCounter = cia.timerBLatch;
-            cia.icrData |= 0x02; // Timer B underflow flag
-
-            if (cia.crb & 0x08) {
-                cia.timerBRunning = false;
-                cia.crb &= ~0x01;
-            }
-
-            if (cia[irqEnabledKey]) {
-                cia.icrData |= 0x80;
-                triggerInterrupt();
-            }
-        }
+    tickCIATimerBFromA(cia, triggerInterrupt, underflows = 1) {
+        return this.tickCIATimer(cia, 'B', underflows, triggerInterrupt);
     }
 
     //
@@ -1159,7 +1139,7 @@ export class C64Machine {
         
         // Update VIC-II raster position
         this.vic.rasterCycle += stepCycles;
-        const cyclesPerFullFrame = CYCLES_PER_RASTER_LINE * RASTER_LINES_PER_FRAME;
+        const cyclesPerFullFrame = this.rasterTiming.cyclesPerFrame;
         if (this.vic.rasterCycle >= cyclesPerFullFrame) {
             this.vic.rasterCycle -= cyclesPerFullFrame;
         }
@@ -1193,60 +1173,45 @@ export class C64Machine {
         const cia2 = this.cia2;
         const vic = this.vic;
         const cpu = this.cpu;
-        const ram = this.ram;
-        const cyclesPerRasterLine = CYCLES_PER_RASTER_LINE;
-        const cyclesPerFullFrame = CYCLES_PER_RASTER_LINE * RASTER_LINES_PER_FRAME;
+        const { cyclesPerLine: cyclesPerRasterLine, cyclesPerFrame: cyclesPerFullFrame } = this.rasterTiming;
+        const updateIRQ = () => this.updateIRQLine();
+        const updateNMI = () => this.updateNMI();
 
-        // Reset raster cycle counter at frame start
-        vic.rasterCycle = 0;
-        vic.lastRasterLine = -1;
-        vic.badLineStunned = false; // Reset stun flag
-
-        // Execute CPU for one frame's worth of cycles, ticking CIA timer
         let cyclesExecuted = 0;
-        while (cyclesExecuted < this.cyclesPerFrame) {
-            if (cpu.halted) break;
-
-            const stepCycles = cpu.step();
-            cyclesExecuted += stepCycles;
+        // CPU execution and VIC bus steals consume the same chip time.
+        // Whole instructions and flat 40-cycle steals remain the timing unit.
+        const advanceHardware = (cycles) => {
+            cyclesExecuted += cycles;
 
             // Tick CIA1 Timer A
-            if (cia1.timerARunning) {
-                const underflowed = this.tickCIATimer(
-                    cia1, 'A', stepCycles,
-                    () => this.updateIRQLine()
-                );
+            if (cia1.timerARunning && !(cia1.cra & 0x20)) {
+                const underflows = this.tickCIATimer(cia1, 'A', cycles, updateIRQ);
                 // Check if Timer B is counting Timer A underflows (CRB bits 5-6 = 10 or 11)
-                if (underflowed && cia1.timerBRunning && ((cia1.crb & 0x60) >= 0x40)) {
-                    this.tickCIATimerBFromA(cia1, () => this.updateIRQLine());
+                if (underflows && cia1.timerBRunning && ((cia1.crb & 0x60) >= 0x40)) {
+                    this.tickCIATimerBFromA(cia1, updateIRQ, underflows);
                 }
             }
 
             // Tick CIA1 Timer B (when counting system clock - CRB bits 5-6 = 00)
             if (cia1.timerBRunning && ((cia1.crb & 0x60) === 0x00)) {
-                this.tickCIATimer(cia1, 'B', stepCycles, () => this.updateIRQLine());
+                this.tickCIATimer(cia1, 'B', cycles, updateIRQ);
             }
 
             // Tick CIA2 Timer A (NMI timer for sample playback)
-            if (cia2.timerARunning) {
-                const underflowed = this.tickCIATimer(
-                    cia2, 'A', stepCycles,
-                    () => this.updateNMI()
-                );
+            if (cia2.timerARunning && !(cia2.cra & 0x20)) {
+                const underflows = this.tickCIATimer(cia2, 'A', cycles, updateNMI);
                 // Check if Timer B is counting Timer A underflows (CRB bits 5-6 = 10 or 11)
-                if (underflowed && cia2.timerBRunning && ((cia2.crb & 0x60) >= 0x40)) {
-                    this.tickCIATimerBFromA(cia2, () => this.updateNMI());
+                if (underflows && cia2.timerBRunning && ((cia2.crb & 0x60) >= 0x40)) {
+                    this.tickCIATimerBFromA(cia2, updateNMI, underflows);
                 }
             }
 
             // Tick CIA2 Timer B (when counting system clock - CRB bits 5-6 = 00)
             if (cia2.timerBRunning && ((cia2.crb & 0x60) === 0x00)) {
-                this.tickCIATimer(cia2, 'B', stepCycles, () => this.updateNMI());
+                this.tickCIATimer(cia2, 'B', cycles, updateNMI);
             }
 
-            // Check for VIC-II raster IRQ
-            // Calculate current raster line based on global cycle counter
-            vic.rasterCycle += stepCycles;
+            vic.rasterCycle += cycles;
 
             if (vic.rasterCycle >= cyclesPerFullFrame) {
                 vic.rasterCycle -= cyclesPerFullFrame;
@@ -1260,7 +1225,7 @@ export class C64Machine {
                 // before we capture the graphics state for that line.
                 // Critical for split-screen effects (e.g., River Raid status bar)
                 if (vic.lastRasterLine >= 0) {
-                    vic.renderer.renderScanline(vic.frameBuffer, ram, vic.lastRasterLine);
+                    vic.renderer.renderScanline(vic.frameBuffer, this, vic.lastRasterLine);
                 }
 
                 // Reset Bad Line stun flag for new line
@@ -1294,20 +1259,27 @@ export class C64Machine {
                     }
                 }
             }
+        };
 
-            // Check for Bad Line (BA Low)
-            // Stun CPU for ~40 cycles if this is a Bad Line and we haven't stunned yet
-            if (!vic.badLineStunned && vic.renderer.checkBadLine(ram, currentRasterLine)) {
+        // Retain raster position and partial-line state across frame budgets.
+        // Resetting them here would discard instruction overshoot every frame.
+        advanceHardware(0);
+        while (cyclesExecuted < this.cyclesPerFrame) {
+            if (cpu.halted) break;
+            const rasterLine = (vic.rasterCycle / cyclesPerRasterLine) | 0;
+            if (!vic.badLineStunned && vic.renderer.checkBadLine(this, rasterLine)) {
                 const stunCycles = 40;
-                cpu.cycles += stunCycles;
-                cyclesExecuted += stunCycles;
                 vic.badLineStunned = true;
+                cpu.cycles += stunCycles;
+                advanceHardware(stunCycles);
+            } else {
+                advanceHardware(cpu.step());
             }
         }
 
         // Render the final scanline of the frame (since we render the previous line on transition)
         if (vic.lastRasterLine >= 0) {
-            vic.renderer.renderScanline(vic.frameBuffer, ram, vic.lastRasterLine);
+            vic.renderer.renderScanline(vic.frameBuffer, this, vic.lastRasterLine);
         }
 
         // Generate remaining audio samples
@@ -1341,6 +1313,7 @@ export class C64Machine {
     //
     // Load code into RAM at specified address
     // This is a generic method for loading PRG files, PSID drivers, or any binary data.
+    // It writes physical RAM, including beneath ROM/I/O, without touching chips.
     //
     // @param {Uint8Array|Array} data - The binary data to load
     // @param {number} address - The starting address in RAM
@@ -1364,82 +1337,44 @@ export class C64Machine {
     }
 
     //
-    // Load a CRT cartridge file
-    //
-    // CRT format:
-    //   - 64-byte header starting with "C64 CARTRIDGE"
-    //   - CHIP packets containing ROM data
+    // Legacy typed-array loader: install without resetting the running machine.
+    // Use the same parser and mapping as loadCartridge(), which also cold-boots.
     //
     // @param {Uint8Array} data - The CRT file data
     // @returns {object} Cartridge info (name, type, chips loaded)
     //
     loadCrt(data) {
-        // Validate CRT signature
-        const signature = String.fromCharCode(...data.slice(0, 16)).replace(/\0/g, '');
-        if (!signature.startsWith('C64 CARTRIDGE')) {
-            throw new Error('Invalid CRT file: missing C64 CARTRIDGE signature');
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        const cartridge = new Cartridge();
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        if (!cartridge.load(buffer)) {
+            throw new Error('Invalid CRT file');
         }
-
-        // Parse header (64 bytes)
-        const headerLength = (data[0x10] << 24) | (data[0x11] << 16) | (data[0x12] << 8) | data[0x13];
-        const cartType = (data[0x16] << 8) | data[0x17];
-        const exrom = data[0x18];  // /EXROM line (active low: 0=active, 1=inactive)
-        const game = data[0x19];   // /GAME line (active low: 0=active, 1=inactive)
-
-        // Get cartridge name (32 bytes at offset 0x20)
-        let name = '';
-        for (let i = 0x20; i < 0x40 && data[i] !== 0; i++) {
-            name += String.fromCharCode(data[i]);
-        }
-
-        console.log(`CRT: ${name || 'Unknown'} (type ${cartType}), EXROM=${exrom}, GAME=${game}`);
-
-        // Set cartridge lines        this.cartExrom = exrom !== 0;
-        this.cartGame = game !== 0;
-
-        // Parse CHIP packets
-        let offset = headerLength;
-        const chips = [];
-
-        while (offset < data.length) {
-            // CHIP header (16 bytes)
-            const chipSig = String.fromCharCode(...data.slice(offset, offset + 4));
-            if (chipSig !== 'CHIP') {
-                break;
-            }
-
-            const chipLength = (data[offset + 4] << 24) | (data[offset + 5] << 16) |
-                (data[offset + 6] << 8) | data[offset + 7];
-            const chipType = (data[offset + 8] << 8) | data[offset + 9];
-            const bank = (data[offset + 10] << 8) | data[offset + 11];
-            const loadAddr = (data[offset + 12] << 8) | data[offset + 13];
-            const romSize = (data[offset + 14] << 8) | data[offset + 15];
-
-            // Extract ROM data
-            const romData = data.slice(offset + 16, offset + 16 + romSize);
-
-            // Store in appropriate ROM slot based on load address
-            if (loadAddr === 0x8000) {
-                this.cartRomL = new Uint8Array(romData);
-            } else if (loadAddr === 0xA000 || loadAddr === 0xE000) {
-                this.cartRomH = new Uint8Array(romData);
-            }
-
-            chips.push({ type: chipType, bank, loadAddr, size: romSize });
-            offset += chipLength;
-        }
-
-        return { name, type: cartType, exrom, game, chips };
+        this.cartridge = cartridge;
+        this.cartRomL = null;
+        this.cartRomH = null;
+        this.updateCartridgeMapping();
+        return {
+            name: cartridge.name,
+            type: cartridge.hardwareType,
+            exrom: cartridge.exrom,
+            game: cartridge.game,
+            chips: cartridge.banks.map(bank => ({
+                type: bank.type, bank: bank.bankNumber, loadAddr: bank.loadAddress, size: bank.size
+            }))
+        };
     }
 
     //
     // Remove the currently loaded cartridge
     //
     removeCartridge() {
+        if (this.cartridge) this.cartridge.eject();
+        this.cartridge = null;
         this.cartRomL = null;
         this.cartRomH = null;
         this.cartGame = true;
         this.cartExrom = true;
+        this.updateMemoryMap();
     }
 }
-

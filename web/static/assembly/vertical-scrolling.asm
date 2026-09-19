@@ -12,12 +12,18 @@ LINEPTR = $FB       ; 2-byte pointer at $FB/$FC
 
     SEI             ; Disable interrupts
 
-    ; Disable ALL CIA interrupts (only raster IRQ will run)
+    LDA $0314
+    STA OLDIRQ
+    LDA $0315
+    STA OLDIRQ+1
+    LDA $D011
+    AND #$7F
+    STA OLDCTRL
+
+    ; Suspend the BASIC keyboard IRQ, leaving CIA2/NMI configuration untouched
     LDA #$7F
     STA $DC0D       ; Disable CIA1 interrupts (keyboard scan, etc.)
-    STA $DD0D       ; Disable CIA2 interrupts (NMI sources)
     LDA $DC0D       ; Acknowledge any pending CIA1
-    LDA $DD0D       ; Acknowledge any pending CIA2
 
     ; Clear any pending VIC-II interrupts
     LDA #$FF
@@ -74,6 +80,7 @@ SETCOL:
     STA LINEPTR+1   ; Zero-page pointer high byte
     LDA #$00
     STA TRAILCT     ; Trailing blank counter
+    STA DONE        ; Allow another SYS without reloading the program
     LDA #$05        ; Start with 5 blank lines (quick scroll in from bottom)
     STA LEADBLK
 
@@ -83,6 +90,22 @@ SETCOL:
 WAIT:
     LDA DONE
     BEQ WAIT
+
+    ; Stop our raster handler before returning control to BASIC
+    SEI
+    LDA #$00
+    STA $D01A
+    LDA #$01
+    STA $D019
+    LDA OLDCTRL
+    STA $D011
+    LDA OLDIRQ
+    STA $0314
+    LDA OLDIRQ+1
+    STA $0315
+    LDA #$81        ; Restore the BASIC CIA1 Timer A keyboard interrupt
+    STA $DC0D
+    CLI
     RTS
 
 ; IRQ handler - called every frame
@@ -226,6 +249,10 @@ TRAILCT:
     BYTE $00        ; Trailing blank counter
 DONE:
     BYTE $00        ; Done flag
+OLDIRQ:
+    WORD $0000
+OLDCTRL:
+    BYTE $00
 
 ; Text lines - format: offset, text bytes, $00 terminator
 ; $FF = blank line, $FE = end of all lines

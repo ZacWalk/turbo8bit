@@ -12,6 +12,7 @@ Uses py_mini_racer to run the JavaScript player in a test context.
 """
 
 import json
+import sys
 
 from tests.test_utils import (
     SID_DIR,
@@ -31,21 +32,22 @@ def test_sid_parsing():
     print("\n" + "=" * 70)
     print("Test 1: SID File Parsing")
     print("=" * 70)
-    
+
     ctx = create_player_context()
     errors = []
-    
+
     sid_files = list(SID_DIR.glob("*.sid"))
     if not sid_files:
-        print("  ⚠ No SID files found in", SID_DIR)
-        return False
-    
+        raise AssertionError(f"No SID fixtures found in {SID_DIR}")
+
     for sid_path in sid_files:
         sid_bytes = load_sid_file(sid_path)
         ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-        
+
         try:
-            result = eval_json(ctx, """
+            result = eval_json(
+                ctx,
+                """
                 (function() {
                     try {
                         var buffer = new Uint8Array(sidBytes).buffer;
@@ -66,29 +68,31 @@ def test_sid_parsing():
                         return { success: false, error: e.toString() };
                     }
                 })()
-            """)
-            
-            if result['success']:
+            """,
+            )
+
+            if result["success"]:
                 print(f"\n  ✓ {sid_path.name}")
                 print(f"    Magic: {result['magic']}, Songs: {result['songs']}")
                 print(f"    Name: {result['name']}")
                 print(f"    Author: {result['author']}")
-                print(f"    Load: ${result['loadAddress']:04X}, Init: ${result['initAddress']:04X}, Play: ${result['playAddress']:04X}")
+                print(
+                    f"    Load: ${result['loadAddress']:04X}, Init: ${result['initAddress']:04X}, Play: ${result['playAddress']:04X}"
+                )
                 print(f"    Data size: {result['dataLength']} bytes")
             else:
                 print(f"\n  ✗ {sid_path.name}: {result['error']}")
-                errors.append((sid_path.name, result['error']))
-                
+                errors.append((sid_path.name, result["error"]))
+
         except Exception as e:
             print(f"\n  ✗ {sid_path.name}: Exception - {e}")
             errors.append((sid_path.name, str(e)))
-    
+
     if errors:
         print(f"\n  Failed: {len(errors)} of {len(sid_files)}")
-        return False
+        raise AssertionError(f"SID parsing failed: {errors}")
     else:
         print(f"\n  All {len(sid_files)} SID files parsed successfully!")
-        return True
 
 
 def test_player_initialization():
@@ -96,18 +100,21 @@ def test_player_initialization():
     print("\n" + "=" * 70)
     print("Test 2: C64Machine Initialization")
     print("=" * 70)
-    
+
     ctx = create_player_context()
     errors = []
-    
+
     sid_files = list(SID_DIR.glob("*.sid"))
-    
+    assert sid_files, f"No SID fixtures found in {SID_DIR}"
+
     for sid_path in sid_files:
         sid_bytes = load_sid_file(sid_path)
         ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-        
+
         try:
-            result = eval_json(ctx, """
+            result = eval_json(
+                ctx,
+                """
                 (function() {
                     try {
                         var buffer = new Uint8Array(sidBytes).buffer;
@@ -128,29 +135,31 @@ def test_player_initialization():
                         return { success: false, error: e.toString(), stack: e.stack || '' };
                     }
                 })()
-            """)
-            
-            if result['success'] and result['initialized']:
+            """,
+            )
+
+            if result["success"] and result["initialized"]:
                 print(f"\n  ✓ {sid_path.name}")
                 print(f"    Tune loaded: {result['tuneLoaded']}")
-                print(f"    Clock: {result['clockFrequency']} Hz, Cycles/Frame: {result['cyclesPerFrame']}")
+                print(
+                    f"    Clock: {result['clockFrequency']} Hz, Cycles/Frame: {result['cyclesPerFrame']}"
+                )
             else:
-                error = result.get('error', 'Not initialized')
+                error = result.get("error", "Not initialized")
                 print(f"\n  ✗ {sid_path.name}: {error}")
-                if result.get('stack'):
+                if result.get("stack"):
                     print(f"    Stack: {result['stack'][:200]}")
                 errors.append((sid_path.name, error))
-                
+
         except Exception as e:
             print(f"\n  ✗ {sid_path.name}: Exception - {e}")
             errors.append((sid_path.name, str(e)))
-    
+
     if errors:
         print(f"\n  Failed: {len(errors)} of {len(sid_files)}")
-        return False
+        raise AssertionError(f"SID initialization failed: {errors}")
     else:
         print(f"\n  All {len(sid_files)} tunes initialized successfully!")
-        return True
 
 
 def test_audio_generation():
@@ -158,18 +167,21 @@ def test_audio_generation():
     print("\n" + "=" * 70)
     print("Test 3: Audio Sample Generation")
     print("=" * 70)
-    
+
     ctx = create_player_context()
     errors = []
-    
+
     sid_files = list(SID_DIR.glob("*.sid"))
-    
+    assert sid_files, f"No SID fixtures found in {SID_DIR}"
+
     for sid_path in sid_files:
         sid_bytes = load_sid_file(sid_path)
         ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-        
+
         try:
-            result = eval_json(ctx, """
+            result = eval_json(
+                ctx,
+                """
                 (function() {
                     try {
                         var buffer = new Uint8Array(sidBytes).buffer;
@@ -185,7 +197,7 @@ def test_audio_generation():
                         // Run for about 2 seconds (~100 frames at 50Hz)
                         for (var frame = 0; frame < 100; frame++) {
                             machine.runFrame(audioBuffer);
-                            var generated = machine.generateAudio(audioBuffer);
+                            var generated = machine.audioSamplesGenerated;
                             totalSamples += generated;
                             
                             for (var i = 0; i < generated; i++) {
@@ -213,31 +225,35 @@ def test_audio_generation():
                         return { success: false, error: e.toString(), stack: e.stack || '' };
                     }
                 })()
-            """)
-            
-            if result['success']:
-                status = "✓" if result['hasAudio'] else "⚠"
+            """,
+            )
+
+            if result["success"]:
+                status = "✓" if result["hasAudio"] else "⚠"
                 print(f"\n  {status} {sid_path.name}")
                 print(f"    Generated: {result['generated']} samples")
-                print(f"    Range: [{result['min']:.4f}, {result['max']:.4f}], Avg: {result['avg']:.4f}")
-                print(f"    Non-zero samples: {result['nonZero']}, Has audio: {result['hasAudio']}")
-                
-                if not result['hasAudio']:
+                print(
+                    f"    Range: [{result['min']:.4f}, {result['max']:.4f}], Avg: {result['avg']:.4f}"
+                )
+                print(
+                    f"    Non-zero samples: {result['nonZero']}, Has audio: {result['hasAudio']}"
+                )
+
+                if not result["hasAudio"]:
                     errors.append((sid_path.name, "No audio generated"))
             else:
                 print(f"\n  ✗ {sid_path.name}: {result['error']}")
-                errors.append((sid_path.name, result['error']))
-                
+                errors.append((sid_path.name, result["error"]))
+
         except Exception as e:
             print(f"\n  ✗ {sid_path.name}: Exception - {e}")
             errors.append((sid_path.name, str(e)))
-    
+
     if errors:
         print(f"\n  Issues: {len(errors)} of {len(sid_files)}")
-        return False
+        raise AssertionError(f"SID audio generation failed: {errors}")
     else:
         print(f"\n  All {len(sid_files)} tunes generate audio!")
-        return True
 
 
 def test_giana_sisters_track1():
@@ -245,19 +261,20 @@ def test_giana_sisters_track1():
     print("\n" + "=" * 70)
     print("Test 4: Great Giana Sisters Track 1")
     print("=" * 70)
-    
+
     sid_path = SID_DIR / "Great_Giana_Sisters.sid"
     if not sid_path.exists():
-        print(f"  ⚠ File not found: {sid_path}")
-        return False
-    
+        raise AssertionError(f"SID fixture not found: {sid_path}")
+
     ctx = create_player_context()
     sid_bytes = load_sid_file(sid_path)
     ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-    
+
     try:
         # First, parse and show the tune info
-        tune_info = eval_json(ctx, """
+        tune_info = eval_json(
+            ctx,
+            """
             (function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var info = parseSidFile(buffer);
@@ -271,8 +288,9 @@ def test_giana_sisters_track1():
                     speed: info.speed
                 };
             })()
-        """)
-        
+        """,
+        )
+
         print(f"\n  Tune Info:")
         print(f"    Name: {tune_info['name']}")
         print(f"    Songs: {tune_info['songs']}, Start: {tune_info['startSong']}")
@@ -280,9 +298,11 @@ def test_giana_sisters_track1():
         print(f"    Init: ${tune_info['initAddress']:04X}")
         print(f"    Play: ${tune_info['playAddress']:04X}")
         print(f"    Speed: 0x{tune_info['speed']:08X}")
-        
+
         # Now test track 1 initialization and playback using C64Machine
-        result = eval_json(ctx, """
+        result = eval_json(
+            ctx,
+            """
             (function() {
                 var buffer = new Uint8Array(sidBytes).buffer;
                 var machine = new C64Machine({ sampleRate: 44100 });
@@ -320,9 +340,10 @@ def test_giana_sisters_track1():
                 // Run 150 frames and look for waveform bits
                 var foundWaveform = false;
                 var firstWaveformFrame = -1;
+                var audioBuffer = new Int16Array(4096);
                 for (var frame = 0; frame < 150; frame++) {
                     var ctrlCountBefore = ctrlWrites.length;
-                    machine.runFrame();
+                    machine.runFrame(audioBuffer);
                     
                     // Check if any new CTRL writes have waveform bits set
                     for (var i = ctrlCountBefore; i < ctrlWrites.length; i++) {
@@ -336,9 +357,8 @@ def test_giana_sisters_track1():
                 }
                 var playWriteCount = initWrites - initWriteCount;
                 
-                // Generate some audio
-                var audioBuffer = new Int16Array(4096);
-                var generated = machine.generateAudio(audioBuffer);
+                // Inspect the final frame's production audio, without clocking SID again.
+                var generated = machine.audioSamplesGenerated;
                 var samples = audioBuffer;
                 
                 // Analyze the audio
@@ -399,24 +419,27 @@ def test_giana_sisters_track1():
                     dataLength: tune.data.length
                 };
             })()
-        """)
-        
-        if result['success']:
+        """,
+        )
+
+        if result["success"]:
             print(f"\n  Initialization:")
             print(f"    SID writes during init: {result['initWrites']}")
             print(f"    SID writes during 150 play frames: {result['playWrites']}")
             print(f"    IRQ vector at $0314: ${result.get('irqVector', 0):04X}")
-            print(f"    Tune data: ${result['loadAddr']:04X}-${result['loadAddr'] + result['dataLength']:04X} ({result['dataLength']} bytes)")
-            
-            if result.get('playMemory'):
-                mem_str = ' '.join(f'{b:02X}' for b in result['playMemory'])
+            print(
+                f"    Tune data: ${result['loadAddr']:04X}-${result['loadAddr'] + result['dataLength']:04X} ({result['dataLength']} bytes)"
+            )
+
+            if result.get("playMemory"):
+                mem_str = " ".join(f"{b:02X}" for b in result["playMemory"])
                 print(f"    Memory at play address: {mem_str}")
-            
+
             # Show I/O reads
             print(f"\n  I/O Reads (top 15 addresses):")
-            for io in result.get('ioReads', [])[:15]:
-                addr = io['addr']
-                count = io['count']
+            for io in result.get("ioReads", [])[:15]:
+                addr = io["addr"]
+                count = io["count"]
                 # Name the address
                 if addr >= 0xD400 and addr < 0xD420:
                     name = f"SID+${addr - 0xD400:02X}"
@@ -429,63 +452,76 @@ def test_giana_sisters_track1():
                 else:
                     name = "I/O"
                 print(f"      ${addr:04X} ({name:12s}): {count} reads")
-            
+
             # Show waveform detection results
             print(f"\n  Waveform Detection:")
             print(f"    Total CTRL writes: {result.get('totalCtrlWrites', 0)}")
             print(f"    Found waveform bits: {result.get('foundWaveform', False)}")
-            if result.get('firstWaveformFrame', -1) >= 0:
+            if result.get("firstWaveformFrame", -1) >= 0:
                 print(f"    First waveform at frame: {result['firstWaveformFrame']}")
-            
+
             # Show first CTRL writes
             print(f"\n  First 20 CTRL register writes:")
-            for w in result.get('ctrlWrites', [])[:20]:
-                voice = {4: 1, 0x0B: 2, 0x12: 3}[w['r']]
-                wave_bits = (w['v'] >> 4) & 0x0F
-                gate = w['v'] & 0x01
-                test = (w['v'] >> 3) & 0x01
-                print(f"      Write #{w['w']:4d}: Voice {voice}: CTRL=${w['v']:02X} (wave={wave_bits}, test={test}, gate={gate})")
-            
+            for w in result.get("ctrlWrites", [])[:20]:
+                voice = {4: 1, 0x0B: 2, 0x12: 3}[w["r"]]
+                wave_bits = (w["v"] >> 4) & 0x0F
+                gate = w["v"] & 0x01
+                test = (w["v"] >> 3) & 0x01
+                print(
+                    f"      Write #{w['w']:4d}: Voice {voice}: CTRL=${w['v']:02X} (wave={wave_bits}, test={test}, gate={gate})"
+                )
+
             print(f"\n  Voice States after 100 frames:")
-            for i, voice in enumerate(result['voices']):
-                print(f"    Voice {i}: wave=0x{voice['waveform']:02X}, freq={voice['freq']}, pw={voice['pulseWidth']}, env={voice['envelope']}")
-            
+            for i, voice in enumerate(result["voices"]):
+                print(
+                    f"    Voice {i}: wave=0x{voice['waveform']:02X}, freq={voice['freq']}, pw={voice['pulseWidth']}, env={voice['envelope']}"
+                )
+
             # Show frequency writes
-            if result.get('freqWrites'):
+            if result.get("freqWrites"):
                 print(f"\n  First 10 frequency writes:")
-                reg_names = {0: 'FREQ_LO1', 1: 'FREQ_HI1', 7: 'FREQ_LO2', 8: 'FREQ_HI2', 14: 'FREQ_LO3', 15: 'FREQ_HI3'}
-                for w in result['freqWrites'][:10]:
-                    name = reg_names.get(w['r'], f"REG{w['r']}")
+                reg_names = {
+                    0: "FREQ_LO1",
+                    1: "FREQ_HI1",
+                    7: "FREQ_LO2",
+                    8: "FREQ_HI2",
+                    14: "FREQ_LO3",
+                    15: "FREQ_HI3",
+                }
+                for w in result["freqWrites"][:10]:
+                    name = reg_names.get(w["r"], f"REG{w['r']}")
                     print(f"      Write #{w['w']:4d}: {name} = ${w['v']:02X}")
-            
+
             print(f"\n  Audio Generation:")
             print(f"    Generated: {result['generated']} samples")
             print(f"    Range: [{result['min']:.4f}, {result['max']:.4f}]")
             print(f"    Average: {result['avg']:.6f}")
             print(f"    Non-zero samples: {result['nonZero']}")
-            
-            print(f"\n  First 10 samples: {[f'{s:.4f}' for s in result['first10Samples']]}")
-            
+
+            print(
+                f"\n  First 10 samples: {[f'{s:.4f}' for s in result['first10Samples']]}"
+            )
+
             print(f"\n  Top 10 most common sample values:")
-            for tv in result.get('topValues', [])[:10]:
-                pct = tv['count'] / result['generated'] * 100
+            for tv in result.get("topValues", [])[:10]:
+                pct = tv["count"] / result["generated"] * 100
                 print(f"    {tv['value']:+.3f}: {tv['count']} ({pct:.1f}%)")
-            
-            if result['hasAudio']:
+
+            if result["hasAudio"]:
                 print(f"\n  ✓ Track 1 generates audio!")
-                return True
             else:
                 print(f"\n  ✗ Track 1 does NOT generate audio!")
-                return False
+                raise AssertionError(f"Giana track 1 did not generate audio: {result}")
         else:
             print(f"\n  ✗ Test failed: {result.get('error', 'Unknown error')}")
-            return False
-            
+            raise AssertionError(f"Giana track 1 failed: {result}")
+
     except Exception as e:
         print(f"\n  ✗ Exception: {e}")
         import traceback
+
         traceback.print_exc()
-        return False
+        raise
 
 
 def test_multi_track():
@@ -493,31 +529,34 @@ def test_multi_track():
     print("\n" + "=" * 70)
     print("Test 5: Multi-Track Playback")
     print("=" * 70)
-    
+
     sid_path = SID_DIR / "Great_Giana_Sisters.sid"
     if not sid_path.exists():
-        print(f"  ⚠ File not found: {sid_path}")
-        return False
-    
+        raise AssertionError(f"SID fixture not found: {sid_path}")
+
     ctx = create_player_context()
     sid_bytes = load_sid_file(sid_path)
     ctx.eval(f"var sidBytes = {json.dumps(sid_bytes)};")
-    
+
     errors = []
-    
+
     # Get total songs
-    total_songs = ctx.eval("""
+    total_songs = ctx.eval(
+        """
         (function() {
             var buffer = new Uint8Array(sidBytes).buffer;
             var info = parseSidFile(buffer);
             return info.songs;
         })()
-    """)
-    
+    """
+    )
+
     print(f"\n  Testing {total_songs} tracks...")
-    
+
     for track in range(1, min(total_songs + 1, 6)):  # Test first 5 tracks max
-        result = eval_json(ctx, f"""
+        result = eval_json(
+            ctx,
+            f"""
             (function() {{
                 try {{
                     var buffer = new Uint8Array(sidBytes).buffer;
@@ -533,7 +572,7 @@ def test_multi_track():
                     // Run for about 0.5 seconds (~25 frames at 50Hz)
                     for (var frame = 0; frame < 25; frame++) {{
                         machine.runFrame(audioBuffer);
-                        var generated = machine.generateAudio(audioBuffer);
+                        var generated = machine.audioSamplesGenerated;
                         totalGenerated += generated;
                         
                         for (var i = 0; i < generated; i++) {{
@@ -555,23 +594,25 @@ def test_multi_track():
                     return {{ success: false, error: e.toString() }};
                 }}
             }})()
-        """)
-        
-        if result['success']:
-            status = "✓" if result['hasAudio'] else "✗"
-            print(f"    {status} Track {track}: range={result['range']:.4f}, nonZero={result['nonZero']}")
-            if not result['hasAudio']:
+        """,
+        )
+
+        if result["success"]:
+            status = "✓" if result["hasAudio"] else "✗"
+            print(
+                f"    {status} Track {track}: range={result['range']:.4f}, nonZero={result['nonZero']}"
+            )
+            if not result["hasAudio"]:
                 errors.append(f"Track {track}")
         else:
             print(f"    ✗ Track {track}: {result['error']}")
             errors.append(f"Track {track}")
-    
+
     if errors:
         print(f"\n  Issues with: {', '.join(errors)}")
-        return False
+        raise AssertionError(f"Multi-track SID playback failed: {errors}")
     else:
         print(f"\n  All tested tracks generate audio!")
-        return True
 
 
 def main():
@@ -579,19 +620,25 @@ def main():
     print("\n" + "=" * 70)
     print("SID File Load and Playback Tests")
     print("=" * 70)
-    
-    results = {
-        "Parsing": test_sid_parsing(),
-        "Initialization": test_player_initialization(),
-        "Audio Generation": test_audio_generation(),
-        "Giana Sisters Track 1": test_giana_sisters_track1(),
-        "Multi-Track": test_multi_track(),
-    }
-    
+
+    results = {}
+    for name, check in [
+        ("Parsing", test_sid_parsing),
+        ("Initialization", test_player_initialization),
+        ("Audio Generation", test_audio_generation),
+        ("Giana Sisters Track 1", test_giana_sisters_track1),
+        ("Multi-Track", test_multi_track),
+    ]:
+        try:
+            check()
+            results[name] = True
+        except Exception:
+            results[name] = False
+
     print("\n" + "=" * 70)
     print("Test Summary")
     print("=" * 70)
-    
+
     passed = 0
     failed = 0
     for name, result in results.items():
@@ -601,10 +648,10 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     print(f"\n  Total: {passed} passed, {failed} failed")
     print("=" * 70 + "\n")
-    
+
     return failed == 0
 
 

@@ -16,22 +16,23 @@
                     aria-label="Commodore 64 screen. Focus it and type to use the C64 keyboard."></canvas>
             
             <div class="c64-controls">
-                <button onclick="emulator.typeText('RUN\n')">RUN</button>
-                <button onclick="emulator.machine.pressStop()">STOP</button>
-                <button onclick="emulator.typeText('LIST\n')">LIST</button>
-                <button id="muteBtn" class="mute-btn muted" onclick="toggleMute()">🔇 MUTED</button>
-                <button class="reset-btn" onclick="emulator.reset()">RESET</button>
+                <button onclick="typeCommand('RUN\n')">RUN</button>
+                <button onclick="stopProgram()">STOP</button>
+                <button onclick="typeCommand('LIST\n')">LIST</button>
+                <button id="muteBtn" class="mute-btn muted" aria-pressed="false">🔇 MUTED</button>
+                <button class="reset-btn" onclick="resetEmulator()">RESET</button>
             </div>
+            <p id="emulator-status" class="c64-status" role="status"></p>
             
             <div class="c64-joystick-controls">
                 <span class="joystick-label">Joystick:</span>
-                <button id="joy1Btn" onclick="toggleJoystick(1)">JOY 1</button>
-                <button id="joy2Btn" onclick="toggleJoystick(2)">JOY 2</button>
+                <button id="joy1Btn" aria-pressed="false" onclick="toggleJoystick(1)">JOY 1</button>
+                <button id="joy2Btn" aria-pressed="false" onclick="toggleJoystick(2)">JOY 2</button>
                 <span class="joystick-hint">(Arrow keys + Space = Fire)</span>
             </div>
             
             <div class="c64-info">
-                <p>Type commands on your keyboard. Press <strong>Escape</strong> (RUN/STOP) to break loops.</p>
+                <p>Focus the screen to type commands. Press <strong>Escape</strong> (RUN/STOP) to break loops.</p>
             </div>
         </div>
     </div>
@@ -60,6 +61,9 @@
         <li><strong>Direct Mode:</strong> Type a command without a line number and it executes immediately.</li>
         <li><strong>Program Mode:</strong> Use line numbers (e.g., <code class="basic-code"><span class="line-num">10</span> <span class="keyword">PRINT</span> <span class="string">"HI"</span></code>). The computer stores these instructions and runs them in order when you type <code class="basic-code"><span class="keyword">RUN</span></code>.</li>
     </ul>
+    <p>The editor's <strong>Run</strong> loads numbered programs on a freshly reset C64.
+        The screen's <strong>RUN</strong> repeats the loaded program without resetting.
+        Direct-mode examples keep the current machine state.</p>
     
     <div class="quickstart-columns">
         <div class="quickstart-col">
@@ -138,7 +142,10 @@ const examples = new ExampleLibrary(
 const emulator = new C64Emulator('screen', { audioEnabled: false });
 emulator.start();
 emulator.enableDragAndDrop();
+emulator.enableKeyboard();
 window.emulator = emulator;
+const emulatorStatus = document.getElementById('emulator-status');
+emulator.bindMuteButton(document.getElementById('muteBtn'), emulatorStatus);
 
 // Initialize BASIC editor
 const editor = new CodeEditor('#basic-editor', {
@@ -151,18 +158,25 @@ const editor = new CodeEditor('#basic-editor', {
 window.editor = editor;
 
 // Track which example is currently loaded
-let currentExampleKey = DEFAULT_EXAMPLE;
+let currentExampleKey = null;
+let actionId = 0;
 
 const sampleSelect = document.getElementById('sampleSelect');
 
 async function initExamples() {
     try {
         await examples.populate(sampleSelect);
+        if (editor.getValue()) {
+            currentExampleKey = null;
+            sampleSelect.value = '';
+            emulatorStatus.textContent = 'Samples are ready. Your code has been kept.';
+            return;
+        }
         sampleSelect.value = DEFAULT_EXAMPLE;
         await loadSelectedSample();
     } catch (e) {
         console.error(e);
-        editor.setValue('REM Could not load the sample programs.');
+        emulatorStatus.textContent = 'Could not load the sample programs. You can still write your own code.';
     }
 }
 initExamples();
@@ -170,113 +184,102 @@ initExamples();
 // Load sample from dropdown
 async function loadSelectedSample() {
     const id = sampleSelect.value;
-    const example = examples.get(id);
-    if (!example) return;
-    currentExampleKey = id;
-    editor.setValue(await examples.source(id));
-    // Direct-mode samples have no line numbers, so BASIC error checking would
-    // flag every line.
-    editor.setHighlightErrors(!example.direct);
+    const previousSource = editor.getValue();
+    try {
+        const selection = await examples.select(id);
+        if (!selection) return;
+        if (editor.getValue() !== previousSource) {
+            sampleSelect.value = currentExampleKey ?? '';
+            emulatorStatus.textContent = 'Sample loading was cancelled because you edited the code. Your code has been kept.';
+            return;
+        }
+        actionId++;
+        currentExampleKey = id;
+        editor.setValue(selection.source);
+        // Direct-mode samples have no line numbers.
+        editor.setHighlightErrors(!selection.example.direct);
+        emulatorStatus.textContent = '';
+    } catch (error) {
+        console.error('Failed to load sample:', error);
+        sampleSelect.value = currentExampleKey ?? '';
+        emulatorStatus.textContent = 'Could not load the sample. Your code has been kept.';
+    }
 }
 window.loadSelectedSample = loadSelectedSample;
 
-//
-// Load a tokenized BASIC program directly into C64 memory
-// This is much faster than typing it in character by character
-//
-async function loadBasicProgram(result) {
-    // Check if this is a direct mode example - type commands instead of tokenizing
-    const currentExample = examples.get(currentExampleKey);
-    if (currentExample && currentExample.direct) {
-        // Type direct mode commands into the emulator
-        const code = await examples.source(currentExampleKey);
-        const lines = code.split('\n').filter(l => l.trim());
-        let delay = 100;
-        for (const line of lines) {
-            setTimeout(() => {
-                emulator.typeText(line + '\n');
-            }, delay);
-            delay += 1500; // Wait for each command to execute
-        }
-        return;
+async function runWhenReady(action, { reset = false } = {}) {
+    const request = ++actionId;
+    let generation;
+    const isCurrent = () => request === actionId
+        && (generation === undefined || generation === emulator.bootGeneration);
+    try {
+        const ready = reset ? emulator.resetToBasic() : emulator.whenBasicReady();
+        generation = emulator.bootGeneration;
+        if (!emulator.basicReady) emulatorStatus.textContent = 'Starting the C64. Waiting for BASIC READY...';
+        await ready;
+        if (!isCurrent()) return;
+        await action();
+        if (isCurrent()) emulatorStatus.textContent = '';
+    } catch (error) {
+        if (!isCurrent()) return;
+        console.error('BASIC command failed:', error);
+        emulatorStatus.textContent = error.message;
     }
-    
-    if (result.errors.length > 0) {
+}
+
+window.typeCommand = text => runWhenReady(() => emulator.typeText(text));
+
+function stopProgram() {
+    actionId++;
+    emulator.breakExecution();
+    emulatorStatus.textContent = '';
+}
+window.stopProgram = stopProgram;
+
+window.resetEmulator = () => {
+    actionId++;
+    emulator.reset();
+    emulatorStatus.textContent = '';
+};
+
+function loadBasicProgram(result) {
+    const direct = examples.get(currentExampleKey)?.direct;
+    const source = editor.getValue();
+    if (!direct) {
         const errors = result.errors.filter(e => e.type === 'error');
         if (errors.length > 0) {
             alert('Cannot load program with errors:\n' + errors.map(e => `Line ${e.line}: ${e.message}`).join('\n'));
             return;
         }
+        if (result.bytes.length <= 4) {
+            alert('No program to load');
+            return;
+        }
     }
-    
-    const bytes = result.bytes;
-    if (bytes.length < 4) {
-        alert('No program to load');
-        return;
-    }
-    
-    // Stop any running program
-    emulator.machine.pressStop();
-    
-    // Wait a moment then load the program
-    setTimeout(() => {
-        // Load the PRG data (bytes already include the load address header)
+
+    return runWhenReady(() => {
+        if (direct) {
+            const lines = source.split('\n').filter(line => line.trim());
+            emulator.cancelTyping();
+            emulator.typeText(lines.join('\n') + '\n', { lineDelay: 1500 });
+            return;
+        }
+
+        const bytes = result.bytes;
         const loadAddress = emulator.machine.loadPrg(bytes);
-        
-        // Calculate end of program
-        const endAddress = loadAddress + bytes.length - 2; // -2 for PRG header
-        
-        // Update BASIC pointers in zero page/low memory
-        // These are essential for BASIC to recognize the loaded program
+        const endAddress = loadAddress + bytes.length - 2;
         const ram = emulator.machine.ram;
-        
-        // $2B-$2C: Start of BASIC (TXTTAB) - should point to $0801
-        ram[0x2B] = BASIC_START & 0xFF;
-        ram[0x2C] = (BASIC_START >> 8) & 0xFF;
-        
-        // $2D-$2E: Start of variables (VARTAB) - points to end of program
-        ram[0x2D] = endAddress & 0xFF;
-        ram[0x2E] = (endAddress >> 8) & 0xFF;
-        
-        // $2F-$30: Start of arrays (ARYTAB) - same as VARTAB initially
-        ram[0x2F] = endAddress & 0xFF;
-        ram[0x30] = (endAddress >> 8) & 0xFF;
-        
-        // $31-$32: End of arrays (STREND) - same as VARTAB initially
-        ram[0x31] = endAddress & 0xFF;
-        ram[0x32] = (endAddress >> 8) & 0xFF;
-        
-        // Type RUN to execute
-        setTimeout(() => {
-            emulator.typeText('RUN\n');
-        }, 100);
-    }, 100);
+        ram[0x2b] = BASIC_START & 0xff;
+        ram[0x2c] = BASIC_START >> 8;
+        // Variables, arrays and string storage initially follow the new program.
+        for (const pointer of [0x2d, 0x2f, 0x31]) {
+            ram[pointer] = endAddress & 0xff;
+            ram[pointer + 1] = (endAddress >> 8) & 0xff;
+        }
+        emulator.typeText('RUN\n');
+    }, { reset: !direct });
 }
 window.loadBasicProgram = loadBasicProgram;
-
-let isMuted = true;
-
-function updateMuteButton() {
-    const btn = document.getElementById('muteBtn');
-    if (isMuted) {
-        btn.textContent = '🔇 MUTED';
-        btn.classList.add('muted');
-    } else {
-        btn.textContent = '🔊 SOUND';
-        btn.classList.remove('muted');
-    }
-}
-
-function toggleMute() {
-    isMuted = !isMuted;
-    updateMuteButton();
-    if (!isMuted) {
-        emulator.enableAudio();
-    } else {
-        emulator.disableAudio();
-    }
-}
-window.toggleMute = toggleMute;
 
 function toggleJoystick(port) {
     const isActive = emulator.toggleJoystick(port);
@@ -287,6 +290,8 @@ function toggleJoystick(port) {
     
     joy1Btn.classList.remove('active');
     joy2Btn.classList.remove('active');
+    joy1Btn.setAttribute('aria-pressed', String(isActive && port === 1));
+    joy2Btn.setAttribute('aria-pressed', String(isActive && port === 2));
     
     if (isActive) {
         if (port === 1) {
@@ -294,31 +299,13 @@ function toggleJoystick(port) {
         } else {
             joy2Btn.classList.add('active');
         }
+        emulator.canvas.focus({ preventScroll: true });
     }
 }
 window.toggleJoystick = toggleJoystick;
 
-// Keyboard handling - prevent editor from capturing when focused on emulator
-document.addEventListener('keydown', e => {
-    // Don't capture keys when typing in the editor
-    if (e.target?.classList?.contains('editor-textarea')) {
-        return;
-    }
-    emulator.handleKeyPress(e);
-});
-
-document.addEventListener('keyup', e => {
-    // Not gated on the editor: a key pressed on the emulator and released after
-    // focus moved into the editor still has to be lifted off the matrix.
-    emulator.handleKeyRelease(e);
-});
-
-// Alt-tabbing away while holding a key would otherwise leave it stuck down.
-window.addEventListener('blur', () => emulator.releaseAllKeys());
-
 window.addEventListener('load', () => {
-    document.body.tabIndex = 0;
-    document.body.focus();
+    emulator.canvas.focus({ preventScroll: true });
 });
 </script>
 {% endblock %}

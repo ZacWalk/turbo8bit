@@ -23,6 +23,37 @@ These six come from `SITE_PAGES` in [web/main.py](web/main.py), which also drive
 the nav and `sitemap.xml`. `/robots.txt`, `/sitemap.xml` and `/auth/*` are served
 alongside them.
 
+### Using the labs
+
+- Focus the C64 screen to use the emulated keyboard. Search fields, sample
+  selectors and other page controls retain their normal keyboard behavior.
+- Programs submitted during startup wait for the real BASIC `READY.` prompt;
+  resetting cancels pending loads and synthetic typing.
+- Slow sample requests cannot overwrite a newer selection or edits made while
+  the sample is loading.
+- The BASIC editor runs the text currently in the editor, including edits to
+  direct-mode examples. Numbered programs load on a freshly reset C64; the
+  screen's **RUN** reruns the existing program without resetting. Direct-mode
+  commands retain the current machine state.
+- Assembly **Stop** returns to BASIC with a cold reset, so it also recovers from
+  halted CPUs, disabled interrupts and banked-out ROM. This clears emulated RAM
+  and ejects cartridges, but preserves the editor source. A program's normal
+  `RTS` does not reset the machine.
+- Sound starts muted. If an audio device or song cannot be opened, the controls
+  stay consistent with the actual playback state and show an error.
+
+The Memory explorer follows all 32 CPU/cartridge banking configurations,
+including unmapped Ultimax regions. Its cells can be inspected with keyboard
+focus and Enter; keys **1**, **2** and **3** toggle LORAM, HIRAM and CHAREN.
+Narrow screens scroll the table rather than collapsing its address columns.
+Decorative 3D chips pause offscreen and respect reduced-motion preferences.
+
+Memory annotations are generated from the OCR-derived
+[memory-map.txt](memory-map.txt) by [parse_memmap.py](tools/parse_memmap.py).
+The parser validates address ranges and decimal/hex agreement. Ambiguous
+headers are reported and omitted rather than assigned guessed addresses;
+the source still has unresolved JMPER and MEMSIZ headers.
+
 ## Quick start
 
 Requires Python 3.10+ and PowerShell.
@@ -71,6 +102,9 @@ C64Emulator (emulator.js)          SIDPlayer (sid-player.js)
 
 Everything the CPU touches goes through `C64Machine.read`/`.write`, so banking,
 I/O and cartridge mapping are decided in exactly one place.
+Physical RAM is separate from I/O registers and color RAM, so storing beneath
+banked-out I/O does not change the hardware. Debugger memory views use `peek`
+to preserve read-sensitive interrupt and collision latches.
 
 ### Modules
 
@@ -109,6 +143,9 @@ masking, VIC bank selection and Bad Line CPU stalling.
 envelopes, ring modulation and oscillator sync, the resonant multi-mode filter,
 non-linear DAC modelling and an external filter stage. Register writes are
 timestamped by CPU cycle and applied at the right point in the sample stream.
+Both audio frontends consume interleaved machine frames. The SID player retains
+unused frame samples between output requests, and validates tune metadata,
+payload bounds and driver relocation space before replacing the current tune.
 
 **CIA** — Timer A/B on both chips in one-shot and continuous modes, Timer B
 counting Timer A underflows, IRQ from CIA1 and NMI from CIA2 (used by digi
@@ -136,6 +173,20 @@ and cartridge code are all covered without a browser.
 
 Some cartridge tests skip unless the matching CRT dump is present locally — CRT
 files live in Cloud Storage rather than in the repo.
+
+Current baseline: **476 passed, 25 skipped, 0 failed** (501 collected), with no
+unchecked boolean-return test warnings.
+
+The suite also covers browser-wrapper audio/input/lifecycle behavior using
+small DOM and Web Audio substitutes, fresh-boot loading against the real
+machine, sample-selection races, SID page error/retry paths, and Flask routes.
+These tests need no browser or extra frontend dependencies. Real-browser checks
+remain important for native keyboard/undo behavior and responsive layout.
+When changing the lab layout, check a 300-line program at desktop and phone
+widths: the editor should scroll internally and never overlap the reference
+section or stretch the entire workspace to the source's height.
+Check validation feedback too: wrapped mobile controls must not clip the status
+row below the code area.
 
 ## License
 

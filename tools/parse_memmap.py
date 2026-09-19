@@ -9,9 +9,23 @@ a structured JSON format usable by the web interface.
 
 import re
 import json
+import warnings
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
+
+
+# Exact source headings only: these repairs do not rewrite narrative text or
+# guess between conflicting, otherwise valid decimal/hexadecimal addresses.
+HEADER_CORRECTIONS = {
+    "$0 D6510": "0 $0 D6510",
+    "1 15-138 $73-$8il CHRGET": "115-138 $73-$8A CHRGET",
+    "776-771 $308-$309 IGONE": "776-777 $308-$309 IGONE",
+    "54272 $D400 FRELOl": "54272 $D400 FRELO1",
+    "54276 $D404 VCREGl": "54276 $D404 VCREG1",
+    "56320 $DCOO CIAPRA": "56320 $DC00 CIAPRA",
+    "56576 $DDOO CI2PRA": "56576 $DD00 CI2PRA",
+}
 
 
 @dataclass
@@ -30,16 +44,17 @@ class MemoryEntry:
 
 def parse_address(addr_str: str) -> tuple[int, Optional[int], str]:
     """Parse address string like '1' or '56324-56327' into (start, end, hex)."""
-    # Handle ranges like "56324-56327"
-    range_match = re.match(r"(\d+)-(\d+)", addr_str.strip())
-    if range_match:
-        start = int(range_match.group(1))
-        end = int(range_match.group(2))
-        return start, end, f"${start:04X}-${end:04X}"
-
-    # Single address
-    addr = int(addr_str.strip())
-    return addr, None, f"${addr:04X}"
+    match = re.fullmatch(r"(\d+)(?:-(\d+))?", addr_str.strip())
+    if not match:
+        raise ValueError(f"Invalid address: {addr_str!r}")
+    start = int(match.group(1))
+    end = int(match.group(2)) if match.group(2) else None
+    if not 0 <= start <= (end if end is not None else start) <= 0xFFFF:
+        raise ValueError(f"Invalid address range: {addr_str!r}")
+    hex_addr = f"${start:04X}"
+    if end is not None:
+        hex_addr += f"-${end:04X}"
+    return start, end, hex_addr
 
 
 def determine_region(address: int) -> str:
@@ -75,53 +90,77 @@ def determine_region(address: int) -> str:
 
 
 def parse_bits(text: str) -> list:
-    """Extract bit-level descriptions from text."""
+    """Extract explicit bit-field headings and their wrapped first paragraph."""
     bits = []
-    # Pattern: "Bit N:" or "Bits N-M:" followed by description
-    bit_pattern = re.compile(
-        r"Bit\s+(\d+)(?:-(\d+))?[:\s]+([^\n]+?)(?=\nBit\s+\d|$)",
-        re.IGNORECASE | re.DOTALL,
+    heading = re.compile(
+        r"^Bits?[ \t]+([0-7])(?:[ \t]*-[ \t]*([0-7]))?[ \t]*:[ \t]*(.*)$",
+        re.IGNORECASE,
     )
-
-    for match in bit_pattern.finditer(text):
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        match = heading.match(line.strip())
+        if not match:
+            continue
         bit_start = int(match.group(1))
         bit_end = int(match.group(2)) if match.group(2) else None
-        bit_desc = match.group(3).strip()
-        # Clean up the description
-        bit_desc = re.sub(r"\s+", " ", bit_desc)
-
+        paragraph = [match.group(3)]
+        for continuation in lines[index + 1 :]:
+            continuation = continuation.strip()
+            if not continuation or heading.match(continuation):
+                break
+            paragraph.append(continuation)
+        bit_desc = re.sub(r"\s+", " ", " ".join(paragraph)).strip()
         bits.append({"bit": bit_start, "bit_end": bit_end, "description": bit_desc})
-
     return bits
 
 
 def parse_memmap(text: str) -> list[MemoryEntry]:
-    """Parse the memory map text into structured entries."""
+    """Parse validated headings in the book's address-ordered chapters.
+
+    Token tables inside the ROM chapters contain low-valued decimal/hex pairs,
+    but they are not a second zero-page chapter. Ambiguous address pairs are
+    omitted with a warning rather than publishing a guessed address.
+    """
     entries = []
 
     # Primary pattern for location headers:
     # <decimal> $<hex> <NAME>
-    # e.g., "0 D6510" or "1 $1 R6510" or "56324 $DC04 TIMALO"
+    # e.g., "0 $0 D6510" or "1 $1 R6510" or "56324 $DC04 TIMALO"
     # Also handles ranges like "56324-56327 $DC04-$DC07"
     # Note: Some entries lack the $ prefix on hex
 
     location_pattern = re.compile(
-        r"^(\d+(?:-\d+)?)\s+\$?([0-9A-Fa-f]+(?:-\$?[0-9A-Fa-f]+)?)\s+([A-Z][A-Z0-9_]*)\s*$",
+        r"^(\d+(?:-\d+)?)[ \t]+\$?([0-9A-Fa-f]+(?:-\$?[0-9A-Fa-f]+)?)[ \t]+([A-Z][A-Z0-9_]*)[ \t]*$",
         re.MULTILINE,
     )
 
-    # Also look for "Location Range:" headers
-    range_pattern = re.compile(
-        r"Location Range:\s*(\d+)-(\d+)\s*\(\$([0-9A-Fa-f]+)-\s*\$([0-9A-Fa-f]+)\)",
-        re.IGNORECASE,
-    )
+    # Rejected address headings still bound content; token-table rows do not.
+    matches: list[tuple[re.Match[str], bool]] = []
+    past_zero_page = False
+    for match in location_pattern.finditer(text):
+        try:
+            start, end, _ = parse_address(match.group(1))
+            hex_addresses = [
+                int(part, 16) for part in match.group(2).replace("$", "").split("-")
+            ]
+            if hex_addresses != ([start, end] if end is not None else [start]):
+                raise ValueError("Decimal and hexadecimal addresses disagree")
+        except ValueError:
+            warnings.warn(
+                f"Skipping inconsistent address header: {match.group(0).strip()}",
+                stacklevel=2,
+            )
+            matches.append((match, False))
+            continue
+        if past_zero_page and start < 0x100:
+            continue
+        past_zero_page |= start >= 0x100
+        matches.append((match, True))
 
-    # Find all location headers
-    matches = list(location_pattern.finditer(text))
-
-    for i, match in enumerate(matches):
+    for i, (match, valid) in enumerate(matches):
+        if not valid:
+            continue
         addr_str = match.group(1)
-        hex_str = match.group(2)
         name = match.group(3)
 
         # Parse address
@@ -129,7 +168,7 @@ def parse_memmap(text: str) -> list[MemoryEntry]:
 
         # Get the text between this match and the next
         start_pos = match.end()
-        end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        end_pos = matches[i + 1][0].start() if i + 1 < len(matches) else len(text)
         content = text[start_pos:end_pos].strip()
 
         # Extract title (first line/paragraph before detailed description)
@@ -190,11 +229,11 @@ def clean_ocr_text(text: str) -> str:
     # Remove page numbers and headers
     text = re.sub(r"^\d+\s*$", "", text, flags=re.MULTILINE)
 
-    # Remove common OCR artifacts
-    text = text.replace("", "")  # Remove odd characters
-
     # Normalize whitespace
     text = re.sub(r"[ \t]+", " ", text)
+    text = "\n".join(
+        HEADER_CORRECTIONS.get(line.strip(), line) for line in text.splitlines()
+    )
 
     return text
 
